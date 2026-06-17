@@ -1,0 +1,20 @@
+{
+    "name": "ByteDance.PICO.MCPExtensions.Editor",
+    "rootNamespace": "ByteDance.PICO.MCPExtensions.Editor",
+    "references": [
+        "Unity.XR.CoreUtils",
+        "Unity.XR.Interaction.Toolkit",
+        "Unity.InputSystem",
+        "ByteDance.PICO.XR",
+        "ByteDance.PICO.XR.Editor"
+    ],
+    "includePlatforms": [ "Editor" ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

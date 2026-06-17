@@ -1,2 +1,0 @@
-# Unity-MCP-Extensions
-This package extend the Unity MCP with PICO XR SDK. You can get access to the Unity MCP through there [AI Gateway Beta early access](https//create.unity.com/UnityAIGatewayBeta). Use the additional tool to build your PICO VR experience using the LLM of your choice.
