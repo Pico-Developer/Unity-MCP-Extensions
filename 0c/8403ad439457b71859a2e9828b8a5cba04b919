@@ -1,0 +1,43 @@
+Editor.meta
+  s_284f4eb3a99702::t_8f65c9a6e5d306 1-8
+Editor/ByteDance.PICO.MCPExtensions.Editor.asmdef.meta
+  s_284f4eb3a99702::t_b398332dca5565 1-7
+Editor/PXR_MCP_Common.cs.meta
+  s_284f4eb3a99702::t_912c894f656bd6 1-2
+Editor/PXR_MCP_Features.cs.meta
+  s_284f4eb3a99702::t_3b8cf129e838ae 1-2
+Editor/PXR_MCP_PackageOps.cs.meta
+  s_284f4eb3a99702::t_a01aebc9dfd750 1-2
+Editor/Tools.meta
+  s_284f4eb3a99702::t_48b4c2e8edc780 1-8
+Editor/Tools/ByteDance.PICO.MCPExtensions.Tools.asmdef.meta
+  s_284f4eb3a99702::t_0dff11b38f5acd 1-7
+Editor/Tools/PXR_MCP_Result.cs.meta
+  s_284f4eb3a99702::t_c035d12f71e684 1-2
+Editor/Tools/PXR_MCP_Tools.cs.meta
+  s_284f4eb3a99702::t_cc0be3cd6804f3 1-2
+LICENSE.md.meta
+  s_284f4eb3a99702::t_0b14e292b96108 1-7
+README.md.meta
+  s_284f4eb3a99702::t_8dcf9db21ef3d1 1-7
+package.json.meta
+  s_284f4eb3a99702::t_ec0ced2634653f 1-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "0c8403ad439457b71859a2e9828b8a5cba04b919",
+  "prompts": {},
+  "sessions": {
+    "s_284f4eb3a99702": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f3188-4c67-79e0-8da0-3a5ae5215f1f",
+        "model": "unknown"
+      },
+      "human_author": "guokai <guokai.7784@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
