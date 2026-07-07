@@ -324,5 +324,34 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             }
             return null;
         }
+
+        // Public reflection helper (R3: no hard type reference across versions / assemblies).
+        // Resolves a type by its full name first, then falls back to a simple (namespace-less)
+        // name match across every loaded assembly. Used to locate runtime MonoBehaviours that
+        // are copied into the project at enable time and thus cannot be referenced by asmdef
+        // (e.g. the global-namespace `SpatialMeshManager` driver). Returns null if absent.
+        public static Type FindLoadedType(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return null;
+
+            // 1) Exact full-name match.
+            var byFull = FindTypeInLoadedAssemblies(name);
+            if (byFull != null) return byFull;
+
+            // 2) Simple-name match (the driver ships with no namespace).
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                Type[] types;
+                try { types = asm.GetTypes(); }
+                catch (System.Reflection.ReflectionTypeLoadException e) { types = e.Types; }
+                catch { continue; }
+                if (types == null) continue;
+                foreach (var t in types)
+                {
+                    if (t != null && t.Name == name) return t;
+                }
+            }
+            return null;
+        }
     }
 }
