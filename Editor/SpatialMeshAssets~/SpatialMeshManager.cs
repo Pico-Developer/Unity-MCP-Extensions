@@ -13,7 +13,7 @@ PICO Technology Co., Ltd.
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using Unity.XR.PXR;
+using ByteDance.PICO.XR;
 using UnityEngine;
 using UnityEngine.XR;
 using UnityEngine.XR.Management;
@@ -40,7 +40,6 @@ public class SpatialMeshManager : MonoBehaviour
     private Mesh mesh;
     private Transform _camera;
     private readonly object listLock = new();
-    readonly ConvexHullCalculator calc = new();
     public GameObject convexHull;
     private bool isStopUpdateMesh = false;
     // todo：调试用
@@ -246,64 +245,9 @@ public class SpatialMeshManager : MonoBehaviour
     {
         bool hasConvexHull = convexHull != null;
         if (hasConvexHull){
-            DrawFinalMeshConvexHull();
             bounds = convexHull.GetComponentInChildren<MeshFilter>().mesh.bounds;
         }
         return hasConvexHull;
-    }
-    private void DrawFinalMeshConvexHull()
-    {
-        var meshList = spaticalMeshList.Values.ToList();
-        var meshFilter = convexHull.GetComponentInChildren<MeshFilter>();
-        var meshCollider = convexHull.GetComponentInChildren<MeshCollider>();
-
-        if (meshFilter.mesh == null)
-        {
-            mesh = new Mesh();
-            mesh.Clear();
-            mesh.MarkDynamic();
-        }
-        else
-        {
-            mesh = meshFilter.mesh;
-            mesh.Clear();
-        }
-
-        var points = new List<Vector3>();
-        var vertices = new List<Vector3>();
-        var triangles = new List<int>();
-        var normals = new List<Vector3>();
-
-#if !UNITY_EDITOR
-        for (var i = 0; i < meshList.Count; i++)
-        {
-            var block = meshList[i].GetComponentInChildren<MeshFilter>().mesh;
-
-            for (var j = 0; j < block.vertices.Length; j++)
-            {
-                vertices.Add(block.vertices[j]);
-            }
-        }
-#endif
-        if (vertices.Count > 4)
-        {
-
-            calc.GenerateHull(vertices, true, ref points, ref triangles, ref normals);
-            mesh.SetVertices(points);
-            // 法线向内
-            for (var i = 0; i < triangles.Count;)
-            {
-                (triangles[i + 2], triangles[i]) = (triangles[i], triangles[i + 2]);
-                i += 3;
-            }
-            mesh.SetTriangles(triangles, 0);
-            mesh.RecalculateNormals();
-            meshFilter.mesh = mesh;
-            if (meshCollider != null)
-            {
-                meshCollider.sharedMesh = mesh;
-            }
-        }
     }
 }
 #endif
