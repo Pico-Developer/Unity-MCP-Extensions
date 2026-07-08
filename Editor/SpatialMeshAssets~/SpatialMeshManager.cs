@@ -21,7 +21,6 @@ using UnityEngine.XR.Management;
 public class SpatialMeshManager : MonoBehaviour
 {
     public static SpatialMeshManager Instance { get; private set; }
-    public Material m_mask;
     // todo：调试用
     [Header("通用配置")]
     [SerializeField] private int maxRenderPerFrame = 100; // 每帧最大渲染数量
@@ -29,7 +28,6 @@ public class SpatialMeshManager : MonoBehaviour
     [Header("材质与容器")]
     [SerializeField] private Transform meshContainer; // mesh容器
     [SerializeField] private GameObject meshPrefab; // 模版
-    [SerializeField] private GameObject meshCalcPrefab;
     [SerializeField] private Material wireframeMaterial;
     // todo:替换为最终带stencil透明材质
     [SerializeField] private Material transparentMaterial;
@@ -40,7 +38,6 @@ public class SpatialMeshManager : MonoBehaviour
     private Mesh mesh;
     private Transform _camera;
     private readonly object listLock = new();
-    public GameObject convexHull;
     private bool isStopUpdateMesh = false;
     // todo：调试用
     void Awake()
@@ -66,7 +63,6 @@ public class SpatialMeshManager : MonoBehaviour
     {
         StopUpdateMesh();
     }
-
     private void InitSystem()
     {
         if (XRGeneralSettings.Instance != null && XRGeneralSettings.Instance.Manager != null)
@@ -92,7 +88,6 @@ public class SpatialMeshManager : MonoBehaviour
             pool.Enqueue(mesh);
             mesh.SetActive(false);
         }
-        convexHull = Instantiate(meshCalcPrefab, meshContainer);
     }
     void Update()
     {
@@ -240,14 +235,6 @@ public class SpatialMeshManager : MonoBehaviour
 #if !UNITY_EDITOR
         if (system.running) PXR_Manager.SpatialMeshDataUpdated -= PXR_OnSpatialMeshDataUpdated;
 #endif
-    }
-    public bool CaculateBounds(ref Bounds bounds)
-    {
-        bool hasConvexHull = convexHull != null;
-        if (hasConvexHull){
-            bounds = convexHull.GetComponentInChildren<MeshFilter>().mesh.bounds;
-        }
-        return hasConvexHull;
     }
 }
 #endif
