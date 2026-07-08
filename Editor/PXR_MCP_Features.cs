@@ -21,6 +21,30 @@ using PackageInfo = UnityEditor.PackageManager.PackageInfo;
 
 namespace ByteDance.PICO.MCPExtensions.Editor
 {
+    // ---------------- Single-active-camera invariant ----------------
+    // Not a user-facing block: the XR Origin ships its own Main Camera, so the
+    // "only one active camera in the scene" rule is a property maintained by
+    // EnsureXROrigin(). These MenuItems exist only for manual smoke testing in
+    // an Editor without the MCP bridge (mirrors every other block's pattern).
+    public static class PXR_MCP_Camera
+    {
+        [MenuItem("PICO MCP/Camera/Enforce Single Active Camera")]
+        public static void Menu_Enforce()
+        {
+            var origin = PXR_MCP_Common.EnsureXROrigin();
+            if (origin == null) { Debug.LogError("[PICO MCP] No agent XR Origin."); return; }
+            var n = PXR_MCP_Common.EnsureSingleActiveCamera(origin);
+            Debug.Log($"[PICO MCP] Enforce single active camera: {n} foreign camera(s) disabled.");
+        }
+
+        [MenuItem("PICO MCP/Camera/Restore Foreign Cameras")]
+        public static void Menu_Restore()
+        {
+            var n = PXR_MCP_Common.RestoreForeignCameras();
+            Debug.Log($"[PICO MCP] Restored {n} foreign camera(s).");
+        }
+    }
+
     // ---------------- VST ----------------
     public static class PXR_MCP_VST
     {

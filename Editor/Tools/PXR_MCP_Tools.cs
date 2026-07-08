@@ -345,6 +345,7 @@ namespace ByteDance.PICO.MCPExtensions.Tools
                     controller   = ProbeControllerStatus(),
                     locomotion   = ProbeLocomotionStatus(),
                     spatial_mesh = ProbeSpatialMeshStatus(),
+                    camera       = ProbeCameraStatus(),
                 };
                 return PXR_MCP_Result.Ok("PICO XR status snapshot collected.", details);
             }
@@ -356,6 +357,13 @@ namespace ByteDance.PICO.MCPExtensions.Tools
         // =============================================================
         class BlockStatus { public bool installed; public string reason; }
         class LocomotionStatus { public bool active; public List<string> activeChildren; public string reason; }
+        class CameraStatus
+        {
+            public int activeCameras;        // cameras currently active-and-enabled in the scene
+            public int managedDisabled;      // foreign cameras WE disabled to keep the invariant
+            public bool single;              // true when exactly one active camera remains
+            public string reason;
+        }
 
         static BlockStatus ProbeVstStatus()
         {
@@ -426,6 +434,24 @@ namespace ByteDance.PICO.MCPExtensions.Tools
             {
                 installed = mounted,
                 reason = mounted ? null : "container present but SpatialMeshManager not mounted; call enable again",
+            };
+        }
+
+        // Camera invariant probe: how many cameras actually render right now, and
+        // how many foreign cameras we are holding disabled to keep it at one.
+        static CameraStatus ProbeCameraStatus()
+        {
+            var active = PXR_MCP_Common.CountActiveSceneCameras();
+            var managed = PXR_MCP_Common.CountManagedDisabledCameras();
+            string reason = null;
+            if (active == 0) reason = "no active camera in scene (agent XR Origin not created yet?)";
+            else if (active > 1) reason = active + " active cameras — multi-camera render conflict; enable a block or run Enforce Single Active Camera";
+            return new CameraStatus
+            {
+                activeCameras = active,
+                managedDisabled = managed,
+                single = active == 1,
+                reason = reason,
             };
         }
 
