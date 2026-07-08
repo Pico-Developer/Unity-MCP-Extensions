@@ -181,6 +181,17 @@ namespace ByteDance.PICO.MCPExtensions.Tools
             [McpDescription("Operation to perform on the PICO Spatial Mesh block.",
                 Required = true, EnumType = typeof(SpatialMeshAction))]
             public string Action { get; set; }
+
+            [McpDescription("For action=enable: how to handle the geometry-shader wireframe material " +
+                "(the default TriangleFadeOutFromCenter material uses a geometry shader that is unreliable " +
+                "under Vulkan on PICO/Adreno). One of: " +
+                "KeepVulkan (keep Vulkan; use the default geometry-shader material), " +
+                "SwitchOpenGLES3 (switch the Android graphics API to OpenGLES3-only via PlayerSettings, then use " +
+                "the default geometry-shader material), " +
+                "TransparentPlaceholder (do NOT use the default geometry-shader material; generate a fully " +
+                "transparent, user-replaceable placeholder material). Default = KeepVulkan.",
+                EnumType = typeof(PXR_MCP_SpatialMesh.GeometryShaderMode))]
+            public string GeometryMode { get; set; }
         }
 
         [McpTool("pico_xr_spatial_mesh",
@@ -189,7 +200,9 @@ namespace ByteDance.PICO.MCPExtensions.Tools
             "Enable is TWO-PHASE: the first call copies the bundled SpatialMeshManager driver + " +
             "shaders/materials/prefab into the project (Assets/PICO_MCP/SpatialMesh), which triggers " +
             "an Editor recompile. When the response reports an import/recompile in progress, settle-loop " +
-            "on pico_xr_status until the MCP bridge returns, then call enable again to mount and configure the driver.")]
+            "on pico_xr_status until the MCP bridge returns, then call enable again to mount and configure the driver. " +
+            "The enable action accepts a geometryMode (KeepVulkan | SwitchOpenGLES3 | TransparentPlaceholder) that controls how " +
+            "the geometry-shader wireframe material is handled; default KeepVulkan.")]
         public static object PicoXrSpatialMesh(SpatialMeshParams p)
         {
             try
@@ -198,7 +211,8 @@ namespace ByteDance.PICO.MCPExtensions.Tools
                 {
                     case SpatialMeshAction.Enable:
                     {
-                        var outcome = PXR_MCP_SpatialMesh.Ensure(out var detail);
+                        var geometryMode = ParseGeometryMode(p?.GeometryMode);
+                        var outcome = PXR_MCP_SpatialMesh.Ensure(geometryMode, out var detail);
                         switch (outcome)
                         {
                             case PXR_MCP_SpatialMesh.EnsureOutcome.Configured:
@@ -502,6 +516,12 @@ namespace ByteDance.PICO.MCPExtensions.Tools
             }
             throw new ArgumentException("invalid action '" + raw + "' for " + typeof(T).Name +
                                         "; allowed: " + string.Join(", ", Enum.GetNames(typeof(T))));
+        }
+
+        static PXR_MCP_SpatialMesh.GeometryShaderMode ParseGeometryMode(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return PXR_MCP_SpatialMesh.GeometryShaderMode.KeepVulkan;
+            return ParseEnum<PXR_MCP_SpatialMesh.GeometryShaderMode>(raw);
         }
 
         static LocomotionFlags ParseLocomotionFlags(string raw)
