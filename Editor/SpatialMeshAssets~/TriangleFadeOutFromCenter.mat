@@ -8,7 +8,7 @@ Material:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_Name: TriangleFadeOutFromCenter
-  m_Shader: {fileID: 4800000, guid: 16d4c94e107f6445a92c55e2190a4798, type: 3}
+  m_Shader: {fileID: 4800000, guid: 491531e5aad51471d9d5b3d1a1df880b, type: 3}
   m_Parent: {fileID: 0}
   m_ModifiedSerializedProperties: 0
   m_ValidKeywords: []
@@ -16,7 +16,7 @@ Material:
   m_LightmapFlags: 4
   m_EnableInstancingVariants: 0
   m_DoubleSidedGI: 0
-  m_CustomRenderQueue: -1
+  m_CustomRenderQueue: 1999
   stringTagMap: {}
   disabledShaderPasses: []
   m_LockedProperties: 
@@ -144,6 +144,7 @@ Material:
     - _WireColor: {r: 0, g: 0.5529412, b: 0.65882355, a: 0.7019608}
     - _WireframeColor: {r: 0, g: 0, b: 0, a: 1}
   m_BuildTextureStacks: []
+  m_AllowLocking: 1
 --- !u!114 &1150188394515913122
 MonoBehaviour:
   m_ObjectHideFlags: 11
