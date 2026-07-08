@@ -23,6 +23,7 @@
 //      "Initial hide" runs ONLY on first creation; re-finding an existing agent
 //      origin does NOT re-hide modules the user already turned on.
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Unity.XR.CoreUtils;
@@ -74,6 +75,9 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             if (existing != null)
             {
                 ApplyFloorTrackingOrigin(existing.gameObject);
+                // Re-assert the single-active-camera invariant on every ensure so
+                // cameras added after the origin was created are also collapsed.
+                EnsureSingleActiveCamera(existing.gameObject);
                 return existing.gameObject;
             }
 
@@ -95,6 +99,11 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             // Initial hide: keep only Main Camera + core XR Origin visible/active.
             // Any module a block depends on must be re-enabled by that block.
             InitiallyHideNonCoreModules(instance);
+
+            // Enforce the single-active-camera invariant: the agent origin ships
+            // its own Main Camera, so any other enabled scene camera must be
+            // switched off (reversibly) to avoid a multi-camera render conflict.
+            EnsureSingleActiveCamera(instance);
 
             return instance;
         }
@@ -256,6 +265,162 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             if (origin == null) return null;
             var cams = origin.GetComponentsInChildren<Camera>(true);
             return cams.FirstOrDefault(c => c.CompareTag("MainCamera")) ?? cams.FirstOrDefault();
+        }
+
+        // -----------------------------------------------------------------
+        // Single-active-camera invariant
+        // -----------------------------------------------------------------
+        // The agent XR Origin ships its own Main Camera. Any *other* enabled
+        // Camera in the scene produces a multi-camera render conflict (most
+        // visibly it breaks VST passthrough). So whenever we ensure the agent
+        // XR Origin we collapse the scene to a single active camera: the
+        // agent's own.
+        //
+        // Rules honoured (see file header):
+        //   R2 Non-destructive: we NEVER SetActive(false) or destroy a foreign
+        //      camera's GameObject. We only flip Camera.enabled (and the paired
+        //      AudioListener.enabled), which stops rendering/listening without
+        //      mutating the object graph. Fully reversible.
+        //   R5 Undo + SetDirty: every flip is recorded so Ctrl+Z restores it.
+        //   R1 Idempotent: a camera we already disabled is skipped and not
+        //      double-recorded.
+        //
+        // The set of cameras WE disabled is recorded in Editor SessionState
+        // (keyed by scene path, using GlobalObjectId so the reference survives
+        // domain reloads) so RestoreForeignCameras() can re-enable exactly the
+        // cameras we touched — never a camera the user disabled themselves.
+        // SessionState is Editor-session-scoped; Ctrl+Z remains the primary
+        // user-facing restore path across sessions.
+
+        const string DisabledCamerasSessionKeyPrefix = "PICO_MCP.DisabledForeignCameras.";
+
+        static string DisabledCamerasSessionKey()
+        {
+            var scenePath = UnityEngine.SceneManagement.SceneManager.GetActiveScene().path;
+            return DisabledCamerasSessionKeyPrefix + (string.IsNullOrEmpty(scenePath) ? "<untitled>" : scenePath);
+        }
+
+        // Collapse the scene to a single active camera: the agent XR Origin's own.
+        // Returns the number of foreign cameras it disabled on this call (0 when
+        // the invariant already held). Safe to call on every EnsureXROrigin().
+        public static int EnsureSingleActiveCamera(GameObject agentOrigin)
+        {
+            if (agentOrigin == null) return 0;
+
+#if UNITY_2023_1_OR_NEWER
+            var cameras = UnityEngine.Object.FindObjectsByType<Camera>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+#else
+            var cameras = UnityEngine.Object.FindObjectsOfType<Camera>(true);
+#endif
+            var recorded = new List<string>(LoadDisabledCameraIds());
+            int disabledNow = 0;
+
+            foreach (var cam in cameras)
+            {
+                if (cam == null) continue;
+                // Never touch cameras that belong to the agent XR Origin subtree.
+                if (cam.transform.IsChildOf(agentOrigin.transform)) continue;
+                // Already off — nothing to do (R1). Do not record; we didn't disable it.
+                if (!cam.enabled) continue;
+
+                Undo.RecordObject(cam, "PICO MCP: enforce single active camera");
+                cam.enabled = false;
+                EditorUtility.SetDirty(cam);
+
+                // Silence the paired AudioListener too (a scene with >1 enabled
+                // AudioListener spams the console); recorded/restored together.
+                var listener = cam.GetComponent<AudioListener>();
+                if (listener != null && listener.enabled)
+                {
+                    Undo.RecordObject(listener, "PICO MCP: disable foreign AudioListener");
+                    listener.enabled = false;
+                    EditorUtility.SetDirty(listener);
+                }
+
+                var id = GlobalObjectId.GetGlobalObjectIdSlow(cam).ToString();
+                if (!recorded.Contains(id)) recorded.Add(id);
+                disabledNow++;
+            }
+
+            if (disabledNow > 0)
+            {
+                SaveDisabledCameraIds(recorded);
+                Debug.Log($"[PICO MCP] Enforced single active camera: disabled {disabledNow} foreign camera(s).");
+            }
+            return disabledNow;
+        }
+
+        // Re-enable exactly the foreign cameras that EnsureSingleActiveCamera
+        // previously disabled (and their AudioListeners). Cameras the user
+        // disabled on their own are never touched. Returns the count restored.
+        public static int RestoreForeignCameras()
+        {
+            var ids = LoadDisabledCameraIds();
+            if (ids.Count == 0) return 0;
+
+            int restored = 0;
+            foreach (var idStr in ids)
+            {
+                if (!GlobalObjectId.TryParse(idStr, out var gid)) continue;
+                var obj = GlobalObjectId.GlobalObjectIdentifierToObjectSlow(gid);
+                var cam = obj as Camera;
+                if (cam == null) continue;
+                if (!cam.enabled)
+                {
+                    Undo.RecordObject(cam, "PICO MCP: restore foreign camera");
+                    cam.enabled = true;
+                    EditorUtility.SetDirty(cam);
+                }
+                var listener = cam.GetComponent<AudioListener>();
+                if (listener != null && !listener.enabled)
+                {
+                    Undo.RecordObject(listener, "PICO MCP: restore foreign AudioListener");
+                    listener.enabled = true;
+                    EditorUtility.SetDirty(listener);
+                }
+                restored++;
+            }
+
+            ClearDisabledCameraIds();
+            if (restored > 0) Debug.Log($"[PICO MCP] Restored {restored} foreign camera(s).");
+            return restored;
+        }
+
+        // Count of active-and-enabled cameras currently in the scene. A camera
+        // counts only when its GameObject is active in hierarchy AND the Camera
+        // component is enabled (i.e. it actually renders).
+        public static int CountActiveSceneCameras()
+        {
+#if UNITY_2023_1_OR_NEWER
+            var cameras = UnityEngine.Object.FindObjectsByType<Camera>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+#else
+            var cameras = UnityEngine.Object.FindObjectsOfType<Camera>(true);
+#endif
+            return cameras.Count(c => c != null && c.isActiveAndEnabled);
+        }
+
+        // Number of foreign cameras (outside the agent XR Origin) we are
+        // currently holding disabled. 0 when none / no record.
+        public static int CountManagedDisabledCameras()
+        {
+            return LoadDisabledCameraIds().Count;
+        }
+
+        static List<string> LoadDisabledCameraIds()
+        {
+            var raw = SessionState.GetString(DisabledCamerasSessionKey(), "");
+            if (string.IsNullOrEmpty(raw)) return new List<string>();
+            return raw.Split('\n').Where(s => !string.IsNullOrEmpty(s)).ToList();
+        }
+
+        static void SaveDisabledCameraIds(List<string> ids)
+        {
+            SessionState.SetString(DisabledCamerasSessionKey(), string.Join("\n", ids.Distinct()));
+        }
+
+        static void ClearDisabledCameraIds()
+        {
+            SessionState.EraseString(DisabledCamerasSessionKey());
         }
 
         // -----------------------------------------------------------------
