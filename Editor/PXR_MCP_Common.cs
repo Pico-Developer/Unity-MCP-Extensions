@@ -518,54 +518,5 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             }
             return null;
         }
-
-        // -----------------------------------------------------------------
-        // Android graphics API switch (PlayerSettings)
-        // -----------------------------------------------------------------
-        // Some PICO features (e.g. the Spatial Mesh geometry-shader wireframe
-        // material) are unreliable under Vulkan on Adreno GPUs. This flips the
-        // Android build's graphics API list to OpenGLES3-only. Idempotent: a
-        // no-op when the setting already matches.
-        public class GraphicsApiSwitchResult
-        {
-            public bool changed;
-            public string before;
-            public string after;
-            public string detail;
-        }
-
-        public static GraphicsApiSwitchResult SwitchAndroidGraphicsToOpenGLES3()
-        {
-            const BuildTarget target = BuildTarget.Android;
-            var before = PlayerSettings.GetGraphicsAPIs(target);
-            bool wasAuto = PlayerSettings.GetUseDefaultGraphicsAPIs(target);
-            string beforeStr = (wasAuto ? "Auto[" : "[") +
-                               string.Join(", ", before.Select(a => a.ToString())) + "]";
-
-            bool already = !wasAuto
-                           && before.Length == 1
-                           && before[0] == UnityEngine.Rendering.GraphicsDeviceType.OpenGLES3;
-            if (already)
-            {
-                return new GraphicsApiSwitchResult
-                {
-                    changed = false, before = beforeStr, after = beforeStr,
-                    detail = "Android graphics API already OpenGLES3-only; no change.",
-                };
-            }
-
-            PlayerSettings.SetUseDefaultGraphicsAPIs(target, false);
-            PlayerSettings.SetGraphicsAPIs(target, new[] { UnityEngine.Rendering.GraphicsDeviceType.OpenGLES3 });
-            AssetDatabase.SaveAssets();
-
-            var after = PlayerSettings.GetGraphicsAPIs(target);
-            string afterStr = "[" + string.Join(", ", after.Select(a => a.ToString())) + "]";
-            Debug.Log($"[PICO MCP] Android graphics API switched {beforeStr} -> {afterStr}.");
-            return new GraphicsApiSwitchResult
-            {
-                changed = true, before = beforeStr, after = afterStr,
-                detail = "Android graphics API switched to OpenGLES3-only (was " + beforeStr + ").",
-            };
-        }
     }
 }
