@@ -272,8 +272,22 @@ namespace ByteDance.PICO.MCPExtensions.Editor
 
         public enum EnsureOutcome { Configured, ImportingRecompile, Error }
 
+        // Geometry-shader handling for the Spatial Mesh wireframe material.
+        // The default wireframe material (TriangleFadeOutFromCenter) uses a geometry
+        // shader (#pragma geometry) that is unreliable under Vulkan on PICO/Adreno.
+        //   KeepVulkan             - keep Vulkan; bind the default geometry-shader material as-is.
+        //   SwitchOpenGLES3        - switch the Android graphics API to OpenGLES3-only
+        //                            (PlayerSettings) so the geometry shader works, then bind
+        //                            the default geometry-shader material.
+        //   TransparentPlaceholder - do NOT bind the geometry-shader material; generate a
+        //                            fully transparent placeholder material (user-replaceable).
+        public enum GeometryShaderMode { KeepVulkan, SwitchOpenGLES3, TransparentPlaceholder }
+
+        // Generated placeholder material for GeometryShaderMode.TransparentPlaceholder.
+        const string PlaceholderMatFile = "SpatialMeshTransparentPlaceholder.mat";
+
         [MenuItem("PICO MCP/Spatial Mesh/Ensure")]
-        public static void Menu_Ensure() { Ensure(out _); }
+        public static void Menu_Ensure() { Ensure(GeometryShaderMode.KeepVulkan, out _); }
 
         // Two-phase enable:
         //   Phase 1 - if the SpatialMeshManager type is not yet compiled into the domain,
@@ -282,7 +296,10 @@ namespace ByteDance.PICO.MCPExtensions.Editor
         //             then call enable again.
         //   Phase 2 - once the type is loaded, ensure the container, repair asset links,
         //             mount the driver and configure its serialized fields.
-        public static EnsureOutcome Ensure(out string detail)
+        // Backwards-compatible overload (defaults to KeepVulkan).
+        public static EnsureOutcome Ensure(out string detail) => Ensure(GeometryShaderMode.KeepVulkan, out detail);
+
+        public static EnsureOutcome Ensure(GeometryShaderMode mode, out string detail)
         {
             detail = null;
             if (!PXR_MCP_VST.Ensure()) { detail = "VST dependency could not be ensured; see Unity Console."; return EnsureOutcome.Error; } // dependency
@@ -306,6 +323,16 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             var origin = PXR_MCP_Common.FindAgentOrigin();
             if (origin == null) { detail = "no agent XR Origin in scene"; return EnsureOutcome.Error; }
 
+            // GeometryShaderMode.SwitchOpenGLES3: flip the Android graphics API to
+            // OpenGLES3-only so the geometry shader is reliable. Idempotent + independent
+            // of mount state so a re-enable with this mode still enforces the setting.
+            string graphicsNote = null;
+            if (mode == GeometryShaderMode.SwitchOpenGLES3)
+            {
+                var g = PXR_MCP_Common.SwitchAndroidGraphicsToOpenGLES3();
+                graphicsNote = g.detail;
+            }
+
             var container = origin.transform.Find(ContainerName);
             if (container == null)
             {
@@ -318,7 +345,8 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             // Idempotent: driver already mounted -> nothing more to do.
             if (container.GetComponent(driverType) != null)
             {
-                detail = "SpatialMeshManager already mounted and configured.";
+                detail = "SpatialMeshManager already mounted and configured." +
+                         (graphicsNote != null ? " " + graphicsNote : "");
                 return EnsureOutcome.Configured;
             }
 
@@ -328,6 +356,34 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             var meshPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(ProjectAssetsDir + "/" + MeshPrefabFile);
             var wireMat    = AssetDatabase.LoadAssetAtPath<Material>(ProjectAssetsDir + "/" + WireMatFile);
             var maskMat    = AssetDatabase.LoadAssetAtPath<Material>(ProjectAssetsDir + "/" + MaskMatFile);
+
+            // GeometryShaderMode.TransparentPlaceholder: do NOT bind the default
+            // geometry-shader material. Generate a fully transparent, user-replaceable
+            // placeholder and bind it to both the manager's wireframeMaterial field and
+            // the mesh prefab's renderer so nothing renders through the geometry shader.
+            var wireMatToUse = wireMat;
+            string placeholderNote = null;
+            if (mode == GeometryShaderMode.TransparentPlaceholder)
+            {
+                var placeholder = CreateTransparentPlaceholderMaterial();
+                if (placeholder != null)
+                {
+                    wireMatToUse = placeholder;
+                    if (meshPrefab != null)
+                    {
+                        var mr = meshPrefab.GetComponentInChildren<MeshRenderer>(true);
+                        if (mr != null && mr.sharedMaterial != placeholder)
+                        {
+                            mr.sharedMaterial = placeholder;
+                            EditorUtility.SetDirty(meshPrefab);
+                        }
+                    }
+                    AssetDatabase.SaveAssets();
+                    placeholderNote = "Default geometry-shader material skipped; a fully transparent placeholder " +
+                                      "material was generated at " + ProjectAssetsDir + "/" + PlaceholderMatFile +
+                                      ". Replace it with your own material when ready.";
+                }
+            }
 
             var mgr = Undo.AddComponent(container.gameObject, driverType);
             if (mgr == null) { detail = "failed to add SpatialMeshManager component"; return EnsureOutcome.Error; }
@@ -341,12 +397,14 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             SetObj(so, "m_mask", maskMat);
             SetObj(so, "meshContainer", container);   // Transform
             SetObj(so, "meshPrefab", meshPrefab);
-            SetObj(so, "wireframeMaterial", wireMat);
+            SetObj(so, "wireframeMaterial", wireMatToUse);
             so.ApplyModifiedPropertiesWithoutUndo();
             EditorUtility.SetDirty(mgr);
 
             Debug.Log("[PICO MCP] Spatial Mesh: SpatialMeshManager mounted and configured.");
-            detail = "SpatialMeshManager mounted and configured.";
+            detail = "SpatialMeshManager mounted and configured." +
+                     (graphicsNote != null ? " " + graphicsNote : "") +
+                     (placeholderNote != null ? " " + placeholderNote : "");
             return EnsureOutcome.Configured;
         }
 
@@ -465,6 +523,51 @@ namespace ByteDance.PICO.MCPExtensions.Editor
         {
             var p = so.FindProperty(prop);
             if (p != null) p.objectReferenceValue = v;
+        }
+
+        // Create (or reuse) a fully transparent, user-replaceable material for
+        // GeometryShaderMode.TransparentPlaceholder. Picks the first available
+        // transparent-capable shader across render pipelines (R3: no hardcoded
+        // pipeline) and drives its color alpha to 0.
+        static Material CreateTransparentPlaceholderMaterial()
+        {
+            var path = ProjectAssetsDir + "/" + PlaceholderMatFile;
+            var existing = AssetDatabase.LoadAssetAtPath<Material>(path);
+            if (existing != null) return existing;
+
+            Shader shader = null;
+            foreach (var name in new[]
+            {
+                "Universal Render Pipeline/Unlit",
+                "Unlit/Transparent",
+                "Sprites/Default",
+                "Legacy Shaders/Transparent/Diffuse",
+                "Standard",
+            })
+            {
+                shader = Shader.Find(name);
+                if (shader != null) break;
+            }
+            if (shader == null) { Debug.LogWarning("[PICO MCP] No transparent shader found for placeholder material."); return null; }
+
+            var mat = new Material(shader) { name = "SpatialMeshTransparentPlaceholder" };
+            var clear = new Color(1f, 1f, 1f, 0f);
+            if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", clear);
+            if (mat.HasProperty("_Color"))     mat.SetColor("_Color", clear);
+            // Best-effort transparent surface setup for URP / Standard.
+            if (mat.HasProperty("_Surface"))   mat.SetFloat("_Surface", 1f); // URP: Transparent
+            if (mat.HasProperty("_Mode"))      mat.SetFloat("_Mode", 3f);    // Standard: Transparent
+            mat.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
+
+            if (!AssetDatabase.IsValidFolder(ProjectAssetsDir))
+            {
+                // ProjectAssetsDir is created during ImportBundledAssets; guard anyway.
+                Directory.CreateDirectory(Directory.GetParent(Application.dataPath).FullName.Replace("\\", "/") + "/" + ProjectAssetsDir);
+                AssetDatabase.Refresh();
+            }
+            AssetDatabase.CreateAsset(mat, path);
+            AssetDatabase.SaveAssets();
+            return mat;
         }
     }
 }
