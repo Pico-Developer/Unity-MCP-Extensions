@@ -564,9 +564,10 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             Debug.Log("[PICO MCP] Hand tracking removed.");
         }
 
-        static void MountHand(Transform camOffset, GameObject asset, string markerName)
+        static GameObject MountHand(Transform camOffset, GameObject asset, string markerName)
         {
-            if (camOffset.Find(markerName) != null) return; // idempotent per-hand
+            var existing = camOffset.Find(markerName);
+            if (existing != null) return existing.gameObject; // idempotent per-hand
             var inst = (GameObject)PrefabUtility.InstantiatePrefab(asset, camOffset);
             Undo.RegisterCreatedObjectUndo(inst, "PICO MCP mount hand");
             inst.name = markerName;
@@ -574,26 +575,56 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             inst.transform.localRotation = Quaternion.identity;
             inst.transform.localScale    = Vector3.one;
             inst.SetActive(true);
+            return inst;
         }
 
-        // Set PXR_ProjectSetting.GetProjectConfig().handTracking = true via reflection.
-        // Silently no-ops if the PICO SDK type is not present (older/absent SDK).
-        static void EnableHandTrackingProjectSetting()
+        // Apply the project-level hand-tracking configuration via reflection (R3):
+        //   * handTracking = true                     (the ONLY runtime gate for PXR_Hand)
+        //   * handTrackingSupportType = ControllersAndHands (so controllers keep working)
+        // Returns true when handTracking was successfully set (the caller warns
+        // otherwise). Silently no-ops / returns false if the PICO SDK type is
+        // absent (older/absent SDK).
+        static bool EnableHandTrackingProjectSetting()
         {
             var t = FindType(TypeName_PXR_ProjectSetting) ?? FindType(TypeName_PXR_ProjectSetting_Alt);
-            if (t == null) return;
+            if (t == null) return false;
             try
             {
                 var getCfg = t.GetMethod("GetProjectConfig", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-                if (getCfg == null) return;
+                if (getCfg == null) return false;
                 var cfg = getCfg.Invoke(null, null);
-                if (cfg == null) return;
+                if (cfg == null) return false;
+
+                bool handTrackingSet = false;
                 var field = cfg.GetType().GetField("handTracking");
-                if (field != null) field.SetValue(cfg, true);
+                if (field != null) { field.SetValue(cfg, true); handTrackingSet = true; }
+
+                // Best-effort: also widen the support type so both controllers and
+                // hands are delivered. The field is an enum; resolve the
+                // "ControllersAndHands" member by name so we never hardcode its
+                // numeric value (R3). Missing field/enum member is non-fatal.
+                var supportField = cfg.GetType().GetField("handTrackingSupportType");
+                if (supportField != null && supportField.FieldType.IsEnum)
+                {
+                    foreach (var name in Enum.GetNames(supportField.FieldType))
+                    {
+                        if (string.Equals(name, "ControllersAndHands", StringComparison.OrdinalIgnoreCase))
+                        {
+                            supportField.SetValue(cfg, Enum.Parse(supportField.FieldType, name));
+                            break;
+                        }
+                    }
+                }
+
                 var save = t.GetMethod("SaveAssets", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
                 if (save != null) save.Invoke(null, null);
+                return handTrackingSet;
             }
-            catch (Exception e) { Debug.LogWarning("[PICO MCP] Could not set handTracking project setting: " + e.Message); }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[PICO MCP] Could not set handTracking project setting: " + e.Message);
+                return false;
+            }
         }
 
         static Type FindType(string fullName)
