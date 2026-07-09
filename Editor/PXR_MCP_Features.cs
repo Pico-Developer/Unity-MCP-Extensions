@@ -553,6 +553,9 @@ namespace ByteDance.PICO.MCPExtensions.Editor
         {
             var origin = PXR_MCP_Common.FindAgentOrigin();
             if (origin == null) { Debug.Log("[PICO MCP] No agent XR Origin."); return; }
+            // Drop the hand references from the modality manager first so it stops
+            // driving the GameObjects we are about to delete (R4/R5).
+            PXR_MCP_Common.ClearHandsFromModalityManager(origin.gameObject);
             foreach (var t in origin.GetComponentsInChildren<Transform>(true).ToList())
             {
                 if (t == null) continue;
