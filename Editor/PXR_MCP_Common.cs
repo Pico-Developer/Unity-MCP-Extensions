@@ -521,6 +521,28 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             EditorUtility.SetDirty(comp);
         }
 
+        // Assign a GameObject-typed member (property first, then field) by name on
+        // a component instance via reflection. XRInputModalityManager exposes
+        // leftHand/rightHand/leftController/rightController as public GameObject
+        // members, but whether they are properties or fields — and their exact
+        // declaring type — can drift across XRI versions, so we probe both (R3).
+        static void SetGameObjectMember(object target, string memberName, GameObject value)
+        {
+            if (target == null || string.IsNullOrEmpty(memberName)) return;
+            var type = target.GetType();
+            var prop = type.GetProperty(memberName, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+            if (prop != null && prop.CanWrite && prop.PropertyType == typeof(GameObject))
+            {
+                prop.SetValue(target, value);
+                return;
+            }
+            var field = type.GetField(memberName, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+            if (field != null && field.FieldType == typeof(GameObject))
+            {
+                field.SetValue(target, value);
+            }
+        }
+
         static Type FindTypeInLoadedAssemblies(string fullName)
         {
             foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
