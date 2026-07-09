@@ -475,9 +475,12 @@ namespace ByteDance.PICO.MCPExtensions.Editor
     //
     // Unlike Controller / Locomotion, the hand GameObjects are NOT pre-existing
     // children of the XRI Starter Assets rig, so there is nothing for
-    // InitiallyHideNonCoreModules() to hide and PXR_MCP_Common needs no change:
-    // the hands only exist AFTER enable, and Remove() deletes them outright.
-    // Idempotency + status therefore follow the SpatialMesh marker pattern.
+    // InitiallyHideNonCoreModules() to hide: the hands only exist AFTER enable,
+    // and Remove() deletes them outright. Idempotency + status therefore follow
+    // the SpatialMesh marker pattern. Enable additionally wires the mounted
+    // hands into the XR Origin's XRInputModalityManager (see
+    // PXR_MCP_Common.WireHandsToModalityManager) so XRI auto-hides them whenever
+    // a controller becomes tracked.
     public static class PXR_MCP_Hand
     {
         // Dynamic-search prefab names (no hardcoded package version path; R3).
