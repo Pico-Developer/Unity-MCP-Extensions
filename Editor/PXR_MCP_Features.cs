@@ -531,11 +531,18 @@ namespace ByteDance.PICO.MCPExtensions.Editor
                 return false;
             }
 
-            MountHand(camOffset, leftAsset,  MarkerLeft);
-            MountHand(camOffset, rightAsset, MarkerRight);
+            var leftInst  = MountHand(camOffset, leftAsset,  MarkerLeft);
+            var rightInst = MountHand(camOffset, rightAsset, MarkerRight);
+
+            // Wire the mounted hands into the XR Origin's XRInputModalityManager
+            // so XRI natively hides them whenever a controller becomes tracked.
+            PXR_MCP_Common.WireHandsToModalityManager(origin, leftInst, rightInst);
 
             // Turn on the project-level hand-tracking flag via reflection (R3).
-            EnableHandTrackingProjectSetting();
+            // This is the ONLY runtime gate for PXR_Hand tracking, so warn loudly
+            // if it could not be applied (hands would mount but never track).
+            if (!EnableHandTrackingProjectSetting())
+                Debug.LogWarning("[PICO MCP] Hands mounted but PXR_ProjectSetting.handTracking could not be applied — tracking will not run until Hand Tracking is enabled in PICO XR project settings.");
 
             Debug.Log("[PICO MCP] Hand tracking enabled.");
             return true;
