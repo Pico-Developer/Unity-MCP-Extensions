@@ -475,9 +475,12 @@ namespace ByteDance.PICO.MCPExtensions.Editor
     //
     // Unlike Controller / Locomotion, the hand GameObjects are NOT pre-existing
     // children of the XRI Starter Assets rig, so there is nothing for
-    // InitiallyHideNonCoreModules() to hide and PXR_MCP_Common needs no change:
-    // the hands only exist AFTER enable, and Remove() deletes them outright.
-    // Idempotency + status therefore follow the SpatialMesh marker pattern.
+    // InitiallyHideNonCoreModules() to hide: the hands only exist AFTER enable,
+    // and Remove() deletes them outright. Idempotency + status therefore follow
+    // the SpatialMesh marker pattern. Enable additionally wires the mounted
+    // hands into the XR Origin's XRInputModalityManager (see
+    // PXR_MCP_Common.WireHandsToModalityManager) so XRI auto-hides them whenever
+    // a controller becomes tracked.
     public static class PXR_MCP_Hand
     {
         // Dynamic-search prefab names (no hardcoded package version path; R3).
@@ -531,11 +534,18 @@ namespace ByteDance.PICO.MCPExtensions.Editor
                 return false;
             }
 
-            MountHand(camOffset, leftAsset,  MarkerLeft);
-            MountHand(camOffset, rightAsset, MarkerRight);
+            var leftInst  = MountHand(camOffset, leftAsset,  MarkerLeft);
+            var rightInst = MountHand(camOffset, rightAsset, MarkerRight);
+
+            // Wire the mounted hands into the XR Origin's XRInputModalityManager
+            // so XRI natively hides them whenever a controller becomes tracked.
+            PXR_MCP_Common.WireHandsToModalityManager(origin, leftInst, rightInst);
 
             // Turn on the project-level hand-tracking flag via reflection (R3).
-            EnableHandTrackingProjectSetting();
+            // This is the ONLY runtime gate for PXR_Hand tracking, so warn loudly
+            // if it could not be applied (hands would mount but never track).
+            if (!EnableHandTrackingProjectSetting())
+                Debug.LogWarning("[PICO MCP] Hands mounted but PXR_ProjectSetting.handTracking could not be applied — tracking will not run until Hand Tracking is enabled in PICO XR project settings.");
 
             Debug.Log("[PICO MCP] Hand tracking enabled.");
             return true;
@@ -546,6 +556,9 @@ namespace ByteDance.PICO.MCPExtensions.Editor
         {
             var origin = PXR_MCP_Common.FindAgentOrigin();
             if (origin == null) { Debug.Log("[PICO MCP] No agent XR Origin."); return; }
+            // Drop the hand references from the modality manager first so it stops
+            // driving the GameObjects we are about to delete (R4/R5).
+            PXR_MCP_Common.ClearHandsFromModalityManager(origin.gameObject);
             foreach (var t in origin.GetComponentsInChildren<Transform>(true).ToList())
             {
                 if (t == null) continue;
@@ -554,9 +567,10 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             Debug.Log("[PICO MCP] Hand tracking removed.");
         }
 
-        static void MountHand(Transform camOffset, GameObject asset, string markerName)
+        static GameObject MountHand(Transform camOffset, GameObject asset, string markerName)
         {
-            if (camOffset.Find(markerName) != null) return; // idempotent per-hand
+            var existing = camOffset.Find(markerName);
+            if (existing != null) return existing.gameObject; // idempotent per-hand
             var inst = (GameObject)PrefabUtility.InstantiatePrefab(asset, camOffset);
             Undo.RegisterCreatedObjectUndo(inst, "PICO MCP mount hand");
             inst.name = markerName;
@@ -564,26 +578,56 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             inst.transform.localRotation = Quaternion.identity;
             inst.transform.localScale    = Vector3.one;
             inst.SetActive(true);
+            return inst;
         }
 
-        // Set PXR_ProjectSetting.GetProjectConfig().handTracking = true via reflection.
-        // Silently no-ops if the PICO SDK type is not present (older/absent SDK).
-        static void EnableHandTrackingProjectSetting()
+        // Apply the project-level hand-tracking configuration via reflection (R3):
+        //   * handTracking = true                     (the ONLY runtime gate for PXR_Hand)
+        //   * handTrackingSupportType = ControllersAndHands (so controllers keep working)
+        // Returns true when handTracking was successfully set (the caller warns
+        // otherwise). Silently no-ops / returns false if the PICO SDK type is
+        // absent (older/absent SDK).
+        static bool EnableHandTrackingProjectSetting()
         {
             var t = FindType(TypeName_PXR_ProjectSetting) ?? FindType(TypeName_PXR_ProjectSetting_Alt);
-            if (t == null) return;
+            if (t == null) return false;
             try
             {
                 var getCfg = t.GetMethod("GetProjectConfig", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-                if (getCfg == null) return;
+                if (getCfg == null) return false;
                 var cfg = getCfg.Invoke(null, null);
-                if (cfg == null) return;
+                if (cfg == null) return false;
+
+                bool handTrackingSet = false;
                 var field = cfg.GetType().GetField("handTracking");
-                if (field != null) field.SetValue(cfg, true);
+                if (field != null) { field.SetValue(cfg, true); handTrackingSet = true; }
+
+                // Best-effort: also widen the support type so both controllers and
+                // hands are delivered. The field is an enum; resolve the
+                // "ControllersAndHands" member by name so we never hardcode its
+                // numeric value (R3). Missing field/enum member is non-fatal.
+                var supportField = cfg.GetType().GetField("handTrackingSupportType");
+                if (supportField != null && supportField.FieldType.IsEnum)
+                {
+                    foreach (var name in Enum.GetNames(supportField.FieldType))
+                    {
+                        if (string.Equals(name, "ControllersAndHands", StringComparison.OrdinalIgnoreCase))
+                        {
+                            supportField.SetValue(cfg, Enum.Parse(supportField.FieldType, name));
+                            break;
+                        }
+                    }
+                }
+
                 var save = t.GetMethod("SaveAssets", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
                 if (save != null) save.Invoke(null, null);
+                return handTrackingSet;
             }
-            catch (Exception e) { Debug.LogWarning("[PICO MCP] Could not set handTracking project setting: " + e.Message); }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[PICO MCP] Could not set handTracking project setting: " + e.Message);
+                return false;
+            }
         }
 
         static Type FindType(string fullName)
