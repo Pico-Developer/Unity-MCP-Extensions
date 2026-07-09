@@ -467,4 +467,134 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             if (p != null) p.objectReferenceValue = v;
         }
     }
+
+    // ---------------- Hand (PICO hand tracking / virtual hands) ----------------
+    // Mirrors the PICO SDK BuildingBlock "PICO Hand Tracking": instantiate the
+    // HandLeft / HandRight prefabs (each carrying a PXR_Hand component) under
+    // "Camera Offset" and turn on PXR_ProjectSetting.handTracking.
+    //
+    // Unlike Controller / Locomotion, the hand GameObjects are NOT pre-existing
+    // children of the XRI Starter Assets rig, so there is nothing for
+    // InitiallyHideNonCoreModules() to hide and PXR_MCP_Common needs no change:
+    // the hands only exist AFTER enable, and Remove() deletes them outright.
+    // Idempotency + status therefore follow the SpatialMesh marker pattern.
+    public static class PXR_MCP_Hand
+    {
+        // Dynamic-search prefab names (no hardcoded package version path; R3).
+        public const string HandLeftPrefabName  = "HandLeft";
+        public const string HandRightPrefabName = "HandRight";
+        // Agent-owned instance names double as idempotency markers (R1).
+        public const string MarkerLeft  = "[PICO_MCP] Hand Left";
+        public const string MarkerRight = "[PICO_MCP] Hand Right";
+
+        // Reflection targets so we never hard-depend on a specific PICO SDK
+        // version / assembly (R3). PXR_ProjectSetting lives in ByteDance.PICO.XR.
+        const string TypeName_PXR_ProjectSetting = "Unity.XR.PXR.PXR_ProjectSetting";
+        const string TypeName_PXR_ProjectSetting_Alt = "ByteDance.PICO.XR.PXR_ProjectSetting";
+
+        // Locate a PICO hand prefab dynamically. Avoids hardcoded version /
+        // subdirectory paths that break when the PICO XR SDK is restructured.
+        static GameObject LocateHandPrefab(string prefabName)
+        {
+            foreach (var guid in AssetDatabase.FindAssets(prefabName + " t:Prefab"))
+            {
+                var path = AssetDatabase.GUIDToAssetPath(guid);
+                if (path.IndexOf("pico", System.StringComparison.OrdinalIgnoreCase) < 0) continue;
+                if (!path.EndsWith("/" + prefabName + ".prefab", System.StringComparison.OrdinalIgnoreCase)) continue;
+                var asset = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+                if (asset != null) return asset;
+            }
+            return null;
+        }
+
+        [MenuItem("PICO MCP/Hand/Ensure")]
+        public static bool Ensure()
+        {
+            var origin = PXR_MCP_Common.EnsureXROrigin();
+            if (origin == null) return false;
+
+            var camOffset = origin.transform.Find(PXR_MCP_Common.CameraOffsetName);
+            if (camOffset == null) { Debug.LogError("[PICO MCP] Camera Offset not found."); return false; }
+
+            // Idempotent: if both hands already mounted, no-op.
+            if (camOffset.Find(MarkerLeft) != null && camOffset.Find(MarkerRight) != null)
+            {
+                Debug.Log("[PICO MCP] Hand tracking already enabled.");
+                return true;
+            }
+
+            var leftAsset  = LocateHandPrefab(HandLeftPrefabName);
+            var rightAsset = LocateHandPrefab(HandRightPrefabName);
+            if (leftAsset == null || rightAsset == null)
+            {
+                Debug.LogError("[PICO MCP] HandLeft/HandRight prefab not found in any pico-* package. Make sure com.bytedance.pico.xr is installed and contains Assets/Resources/Prefabs/HandLeft.prefab and HandRight.prefab.");
+                return false;
+            }
+
+            MountHand(camOffset, leftAsset,  MarkerLeft);
+            MountHand(camOffset, rightAsset, MarkerRight);
+
+            // Turn on the project-level hand-tracking flag via reflection (R3).
+            EnableHandTrackingProjectSetting();
+
+            Debug.Log("[PICO MCP] Hand tracking enabled.");
+            return true;
+        }
+
+        [MenuItem("PICO MCP/Hand/Remove")]
+        public static void Remove()
+        {
+            var origin = PXR_MCP_Common.FindAgentOrigin();
+            if (origin == null) { Debug.Log("[PICO MCP] No agent XR Origin."); return; }
+            foreach (var t in origin.GetComponentsInChildren<Transform>(true).ToList())
+            {
+                if (t == null) continue;
+                if (t.name == MarkerLeft || t.name == MarkerRight) Undo.DestroyObjectImmediate(t.gameObject);
+            }
+            Debug.Log("[PICO MCP] Hand tracking removed.");
+        }
+
+        static void MountHand(Transform camOffset, GameObject asset, string markerName)
+        {
+            if (camOffset.Find(markerName) != null) return; // idempotent per-hand
+            var inst = (GameObject)PrefabUtility.InstantiatePrefab(asset, camOffset);
+            Undo.RegisterCreatedObjectUndo(inst, "PICO MCP mount hand");
+            inst.name = markerName;
+            inst.transform.localPosition = Vector3.zero;
+            inst.transform.localRotation = Quaternion.identity;
+            inst.transform.localScale    = Vector3.one;
+            inst.SetActive(true);
+        }
+
+        // Set PXR_ProjectSetting.GetProjectConfig().handTracking = true via reflection.
+        // Silently no-ops if the PICO SDK type is not present (older/absent SDK).
+        static void EnableHandTrackingProjectSetting()
+        {
+            var t = FindType(TypeName_PXR_ProjectSetting) ?? FindType(TypeName_PXR_ProjectSetting_Alt);
+            if (t == null) return;
+            try
+            {
+                var getCfg = t.GetMethod("GetProjectConfig", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                if (getCfg == null) return;
+                var cfg = getCfg.Invoke(null, null);
+                if (cfg == null) return;
+                var field = cfg.GetType().GetField("handTracking");
+                if (field != null) field.SetValue(cfg, true);
+                var save = t.GetMethod("SaveAssets", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                if (save != null) save.Invoke(null, null);
+            }
+            catch (Exception e) { Debug.LogWarning("[PICO MCP] Could not set handTracking project setting: " + e.Message); }
+        }
+
+        static Type FindType(string fullName)
+        {
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                Type t = null;
+                try { t = asm.GetType(fullName, false); } catch { }
+                if (t != null) return t;
+            }
+            return null;
+        }
+    }
 }

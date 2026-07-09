@@ -232,6 +232,49 @@ namespace ByteDance.PICO.MCPExtensions.Tools
         }
 
         // =============================================================
+        // pico_xr_hand
+        // =============================================================
+        public enum HandAction { Enable, Disable, Status }
+
+        public class HandParams
+        {
+            [McpDescription("Operation to perform on the PICO hand-tracking (virtual hands) block.",
+                Required = true, EnumType = typeof(HandAction))]
+            public string Action { get; set; }
+        }
+
+        [McpTool("pico_xr_hand",
+            "Enable, disable, or query PICO hand tracking (virtual hands) on the agent XR Origin. " +
+            "Mounts the PICO HandLeft/HandRight models under Camera Offset and enables the hand-tracking project setting.")]
+        public static object PicoXrHand(HandParams p)
+        {
+            try
+            {
+                switch (ParseEnum<HandAction>(p?.Action))
+                {
+                    case HandAction.Enable:
+                    {
+                        var ok = PXR_MCP_Hand.Ensure();
+                        return ok
+                            ? PXR_MCP_Result.Ok("PICO hand models mounted on the agent XR Origin; hand tracking enabled.")
+                            : PXR_MCP_Result.Error("Failed to enable hand tracking.", "PXR_MCP_Hand.Ensure returned false (PICO hand prefabs missing?); see Unity Console.");
+                    }
+                    case HandAction.Disable:
+                        PXR_MCP_Hand.Remove();
+                        return PXR_MCP_Result.Ok("PICO hand models removed.");
+                    case HandAction.Status:
+                    {
+                        var info = ProbeHandStatus();
+                        return PXR_MCP_Result.Ok(
+                            info.installed ? "PICO hand tracking is enabled." : "PICO hand tracking is not enabled.", info);
+                    }
+                }
+                return PXR_MCP_Result.Error("Unknown action.", "action must be one of: enable, disable, status");
+            }
+            catch (Exception e) { return PXR_MCP_Result.FromException("pico_xr_hand", e); }
+        }
+
+        // =============================================================
         // pico_xr_package
         // =============================================================
         public enum PackageAction { List, Info, Add, Remove, Update, ListSamples, ImportSample }
@@ -334,7 +377,7 @@ namespace ByteDance.PICO.MCPExtensions.Tools
         public class StatusParams { /* no parameters */ }
 
         [McpTool("pico_xr_status",
-            "Return a snapshot of all four PICO XR blocks (VST, Controller, Locomotion, Spatial Mesh) on the agent XR Origin.")]
+            "Return a snapshot of all PICO XR blocks (VST, Controller, Locomotion, Spatial Mesh, Hand) plus the camera invariant on the agent XR Origin.")]
         public static object PicoXrStatus(StatusParams _)
         {
             try
@@ -345,6 +388,7 @@ namespace ByteDance.PICO.MCPExtensions.Tools
                     controller   = ProbeControllerStatus(),
                     locomotion   = ProbeLocomotionStatus(),
                     spatial_mesh = ProbeSpatialMeshStatus(),
+                    hand         = ProbeHandStatus(),
                     camera       = ProbeCameraStatus(),
                 };
                 return PXR_MCP_Result.Ok("PICO XR status snapshot collected.", details);
@@ -435,6 +479,24 @@ namespace ByteDance.PICO.MCPExtensions.Tools
                 installed = mounted,
                 reason = mounted ? null : "container present but SpatialMeshManager not mounted; call enable again",
             };
+        }
+
+        static BlockStatus ProbeHandStatus()
+        {
+            var origin = PXR_MCP_Common.FindAgentOrigin();
+            if (origin == null) return new BlockStatus { installed = false, reason = "no agent XR Origin in scene" };
+
+            // Hand block is "installed" when BOTH hand markers are mounted under the origin.
+            bool left = false, right = false;
+            foreach (var t in origin.GetComponentsInChildren<Transform>(true))
+            {
+                if (t.name == PXR_MCP_Hand.MarkerLeft)  left  = true;
+                if (t.name == PXR_MCP_Hand.MarkerRight) right = true;
+            }
+            bool installed = left && right;
+            string reason = null;
+            if (!installed && (left || right)) reason = "only one hand mounted; expected both Left and Right";
+            return new BlockStatus { installed = installed, reason = reason };
         }
 
         // Camera invariant probe: how many cameras actually render right now, and
