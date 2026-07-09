@@ -160,6 +160,48 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             SetComponentEnabledByTypeName(originGo, TypeName_XRInputModalityManager, visible);
         }
 
+        // Hand module: wire the mounted hand GameObjects into the XR Origin's
+        // XRInputModalityManager so XRI natively switches between hands and
+        // controllers by tracking state — when a controller becomes tracked the
+        // manager deactivates the hand GameObjects (and vice versa). This gives
+        // us "auto-hide hands when a controller connects" with no custom runtime
+        // script and no domain reload. The manager type + property names are
+        // resolved by reflection (R3: XRI namespaces drift across versions).
+        public static void WireHandsToModalityManager(GameObject originGo, GameObject leftHand, GameObject rightHand)
+        {
+            if (originGo == null) return;
+            var t = FindTypeInLoadedAssemblies(TypeName_XRInputModalityManager);
+            if (t == null) return; // XRI version doesn't expose the manager; hands just stay visible.
+            var mgr = originGo.GetComponent(t) as Behaviour;
+            if (mgr == null) return;
+
+            Undo.RecordObject(mgr, "PICO MCP wire hands to XRInputModalityManager");
+            if (leftHand  != null) SetGameObjectMember(mgr, "leftHand",  leftHand);
+            if (rightHand != null) SetGameObjectMember(mgr, "rightHand", rightHand);
+            // The manager must be enabled for the auto-switch loop to run.
+            if (!mgr.enabled) mgr.enabled = true;
+            EditorUtility.SetDirty(mgr);
+        }
+
+        // Undo the hand<->manager wiring on Remove(): null the hand references so
+        // the manager no longer drives the (now-deleted) hand GameObjects. Put
+        // the manager back to sleep unless the Controller module is still active
+        // (R4: don't leave a module lit that the user didn't ask for).
+        public static void ClearHandsFromModalityManager(GameObject originGo)
+        {
+            if (originGo == null) return;
+            var t = FindTypeInLoadedAssemblies(TypeName_XRInputModalityManager);
+            if (t == null) return;
+            var mgr = originGo.GetComponent(t) as Behaviour;
+            if (mgr == null) return;
+
+            Undo.RecordObject(mgr, "PICO MCP unwire hands from XRInputModalityManager");
+            SetGameObjectMember(mgr, "leftHand",  null);
+            SetGameObjectMember(mgr, "rightHand", null);
+            if (mgr.enabled && !IsControllerModuleActive(originGo)) mgr.enabled = false;
+            EditorUtility.SetDirty(mgr);
+        }
+
         // Locomotion module: show Locomotion subtree + enable CharacterController +
         // CharacterControllerDriver on the XR Origin root.
         public static void SetLocomotionModuleVisible(GameObject originGo, bool visible)
