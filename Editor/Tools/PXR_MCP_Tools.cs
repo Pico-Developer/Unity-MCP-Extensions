@@ -197,7 +197,11 @@ namespace ByteDance.PICO.MCPExtensions.Tools
 
         [McpTool("pico_xr_spatial_mesh",
             "Enable, disable, or query the PICO Spatial Mesh on the agent XR Origin. " +
-            "Spatial Mesh depends on VST: enable VST first if it is not on.")]
+            "Spatial Mesh depends on VST: enable VST first if it is not on. " +
+            "Enable is TWO-PHASE: the first call copies the bundled SpatialMeshManager driver + " +
+            "shaders/materials/prefab into the project (Assets/PICO_MCP/SpatialMesh), which triggers " +
+            "an Editor recompile. When the response reports an import/recompile in progress, settle-loop " +
+            "on pico_xr_status until the MCP bridge returns, then call enable again to mount and configure the driver.")]
         public static object PicoXrSpatialMesh(SpatialMeshParams p)
         {
             try
@@ -206,10 +210,23 @@ namespace ByteDance.PICO.MCPExtensions.Tools
                 {
                     case SpatialMeshAction.Enable:
                     {
-                        var ok = PXR_MCP_SpatialMesh.Ensure();
-                        return ok
-                            ? PXR_MCP_Result.Ok("Spatial Mesh container created and configured.")
-                            : PXR_MCP_Result.Error("Failed to enable Spatial Mesh.", "PXR_MCP_SpatialMesh.Ensure returned false; see Unity Console.");
+                        var outcome = PXR_MCP_SpatialMesh.Ensure(out var detail);
+                        switch (outcome)
+                        {
+                            case PXR_MCP_SpatialMesh.EnsureOutcome.Configured:
+                                return PXR_MCP_Result.Ok(
+                                    "Spatial Mesh enabled: SpatialMeshManager mounted and configured.",
+                                    new { detail });
+                            case PXR_MCP_SpatialMesh.EnsureOutcome.ImportingRecompile:
+                                // Assets landed; the Editor is (re)compiling the driver. This is NOT an
+                                // error -- the caller must settle-loop on pico_xr_status and re-enable.
+                                return PXR_MCP_Result.Skipped(
+                                    "Spatial Mesh assets imported; Editor is recompiling. " +
+                                    "Poll pico_xr_status until the bridge returns, then call enable again.",
+                                    detail, new { recompiling = true });
+                            default:
+                                return PXR_MCP_Result.Error("Failed to enable Spatial Mesh.", detail);
+                        }
                     }
                     case SpatialMeshAction.Disable:
                         PXR_MCP_SpatialMesh.Remove();
@@ -224,6 +241,49 @@ namespace ByteDance.PICO.MCPExtensions.Tools
                 return PXR_MCP_Result.Error("Unknown action.", "action must be one of: enable, disable, status");
             }
             catch (Exception e) { return PXR_MCP_Result.FromException("pico_xr_spatial_mesh", e); }
+        }
+
+        // =============================================================
+        // pico_xr_hand
+        // =============================================================
+        public enum HandAction { Enable, Disable, Status }
+
+        public class HandParams
+        {
+            [McpDescription("Operation to perform on the PICO hand-tracking (virtual hands) block.",
+                Required = true, EnumType = typeof(HandAction))]
+            public string Action { get; set; }
+        }
+
+        [McpTool("pico_xr_hand",
+            "Enable, disable, or query PICO hand tracking (virtual hands) on the agent XR Origin. " +
+            "Mounts the PICO HandLeft/HandRight models under Camera Offset and enables the hand-tracking project setting.")]
+        public static object PicoXrHand(HandParams p)
+        {
+            try
+            {
+                switch (ParseEnum<HandAction>(p?.Action))
+                {
+                    case HandAction.Enable:
+                    {
+                        var ok = PXR_MCP_Hand.Ensure();
+                        return ok
+                            ? PXR_MCP_Result.Ok("PICO hand models mounted on the agent XR Origin; hand tracking enabled.")
+                            : PXR_MCP_Result.Error("Failed to enable hand tracking.", "PXR_MCP_Hand.Ensure returned false (PICO hand prefabs missing?); see Unity Console.");
+                    }
+                    case HandAction.Disable:
+                        PXR_MCP_Hand.Remove();
+                        return PXR_MCP_Result.Ok("PICO hand models removed.");
+                    case HandAction.Status:
+                    {
+                        var info = ProbeHandStatus();
+                        return PXR_MCP_Result.Ok(
+                            info.installed ? "PICO hand tracking is enabled." : "PICO hand tracking is not enabled.", info);
+                    }
+                }
+                return PXR_MCP_Result.Error("Unknown action.", "action must be one of: enable, disable, status");
+            }
+            catch (Exception e) { return PXR_MCP_Result.FromException("pico_xr_hand", e); }
         }
 
         // =============================================================
@@ -329,7 +389,7 @@ namespace ByteDance.PICO.MCPExtensions.Tools
         public class StatusParams { /* no parameters */ }
 
         [McpTool("pico_xr_status",
-            "Return a snapshot of all four PICO XR blocks (VST, Controller, Locomotion, Spatial Mesh) on the agent XR Origin.")]
+            "Return a snapshot of all PICO XR blocks (VST, Controller, Locomotion, Spatial Mesh, Hand) plus the camera invariant on the agent XR Origin.")]
         public static object PicoXrStatus(StatusParams _)
         {
             try
@@ -340,6 +400,8 @@ namespace ByteDance.PICO.MCPExtensions.Tools
                     controller   = ProbeControllerStatus(),
                     locomotion   = ProbeLocomotionStatus(),
                     spatial_mesh = ProbeSpatialMeshStatus(),
+                    hand         = ProbeHandStatus(),
+                    camera       = ProbeCameraStatus(),
                 };
                 return PXR_MCP_Result.Ok("PICO XR status snapshot collected.", details);
             }
@@ -351,6 +413,13 @@ namespace ByteDance.PICO.MCPExtensions.Tools
         // =============================================================
         class BlockStatus { public bool installed; public string reason; }
         class LocomotionStatus { public bool active; public List<string> activeChildren; public string reason; }
+        class CameraStatus
+        {
+            public int activeCameras;        // cameras currently active-and-enabled in the scene
+            public int managedDisabled;      // foreign cameras WE disabled to keep the invariant
+            public bool single;              // true when exactly one active camera remains
+            public string reason;
+        }
 
         static BlockStatus ProbeVstStatus()
         {
@@ -399,9 +468,64 @@ namespace ByteDance.PICO.MCPExtensions.Tools
         {
             var origin = PXR_MCP_Common.FindAgentOrigin();
             if (origin == null) return new BlockStatus { installed = false, reason = "no agent XR Origin in scene" };
+
+            var container = origin.transform.Find(PXR_MCP_SpatialMesh.ContainerName);
+            if (container == null)
+                return new BlockStatus { installed = false, reason = "Spatial Mesh container not present" };
+
+            // "installed" == the SpatialMeshManager driver is actually mounted on the container.
+            // A bare container without the driver means enable is mid-flight (assets imported,
+            // driver not yet compiled/mounted) -> report not-installed with a settle hint.
+            var driverType = PXR_MCP_Common.FindLoadedType(PXR_MCP_SpatialMesh.DriverTypeName);
+            if (driverType == null)
+                return new BlockStatus
+                {
+                    installed = false,
+                    reason = "container present but SpatialMeshManager type not loaded yet " +
+                             "(assets importing / Editor recompiling, or PICO XR SDK not installed)",
+                };
+
+            var mounted = container.GetComponent(driverType) != null;
             return new BlockStatus
             {
-                installed = origin.transform.Find(PXR_MCP_SpatialMesh.ContainerName) != null,
+                installed = mounted,
+                reason = mounted ? null : "container present but SpatialMeshManager not mounted; call enable again",
+            };
+        }
+
+        static BlockStatus ProbeHandStatus()
+        {
+            var origin = PXR_MCP_Common.FindAgentOrigin();
+            if (origin == null) return new BlockStatus { installed = false, reason = "no agent XR Origin in scene" };
+
+            // Hand block is "installed" when BOTH hand markers are mounted under the origin.
+            bool left = false, right = false;
+            foreach (var t in origin.GetComponentsInChildren<Transform>(true))
+            {
+                if (t.name == PXR_MCP_Hand.MarkerLeft)  left  = true;
+                if (t.name == PXR_MCP_Hand.MarkerRight) right = true;
+            }
+            bool installed = left && right;
+            string reason = null;
+            if (!installed && (left || right)) reason = "only one hand mounted; expected both Left and Right";
+            return new BlockStatus { installed = installed, reason = reason };
+        }
+
+        // Camera invariant probe: how many cameras actually render right now, and
+        // how many foreign cameras we are holding disabled to keep it at one.
+        static CameraStatus ProbeCameraStatus()
+        {
+            var active = PXR_MCP_Common.CountActiveSceneCameras();
+            var managed = PXR_MCP_Common.CountManagedDisabledCameras();
+            string reason = null;
+            if (active == 0) reason = "no active camera in scene (agent XR Origin not created yet?)";
+            else if (active > 1) reason = active + " active cameras — multi-camera render conflict; enable a block or run Enforce Single Active Camera";
+            return new CameraStatus
+            {
+                activeCameras = active,
+                managedDisabled = managed,
+                single = active == 1,
+                reason = reason,
             };
         }
 
