@@ -44,7 +44,9 @@ jobs:
           - apt-get update && apt-get install -y python3 git
           - git config user.name "pico-ci-bot"
           - git config user.email "pico-ci-bot@bytedance.com"
-          # 需求 0:从当前 main 切独立分支
+          # 需求 0:从 from_branch(默认 main)切独立分支
+          - git fetch origin "${FROM_BRANCH}"
+          - git checkout -B "${FROM_BRANCH}" "origin/${FROM_BRANCH}"
           - git checkout -b "release/prep-$(date +%s)"
           # 需求 1+2+校验:补版权头 + 改版本 + 版本校验
           - |
@@ -57,9 +59,13 @@ jobs:
           - rm -f .release_version
           - git add -A
           - 'git commit -m "chore(release): headers & bump to ${REL_VERSION}" || echo "nothing to commit"'
-          # 需求 3:直接推到 GitHub main
+          # 需求 3:推送到 to_branch(默认 main,可多个用空格分隔)
           - git remote add github "https://x-access-token:${GITHUB_TOKEN}@github.com/Pico-Developer/Unity-MCP-Extensions.git"
-          - git push github "HEAD:main"
+          - |
+            for b in ${TO_BRANCH}; do
+              echo "pushing to github ${b}"
+              git push github "HEAD:${b}"
+            done
           # 需求 4:按需打 tag release/v{version} 并推送
           - |
             if [ "${CREATE_TAG}" = "true" ]; then
