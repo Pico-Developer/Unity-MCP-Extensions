@@ -32,7 +32,7 @@ jobs:
     envs:
       VERSION: ${{ Event.Inputs.version }}
       SKIP_VERSION: ${{ Event.Inputs.skip_version }}
-      CREATE_TAG: ${{ Event.Inputs.tag }}
+      TAG: ${{ Event.Inputs.tag }}
       FROM_BRANCH: ${{ Event.Inputs.from_branch }}
       TO_BRANCH: ${{ Event.Inputs.to_branch }}
       GITHUB_TOKEN: ${{ GITHUB_TOKEN }}
@@ -66,9 +66,12 @@ jobs:
               echo "pushing to github ${b}"
               git push github "HEAD:${b}"
             done
-          # 需求 4:按需打 tag release/v{version} 并推送
+          # 需求 4:传了 tag 则打该名 tag 并推送,不传则跳过
           - |
-            if [ "${CREATE_TAG}" = "true" ]; then
-              git tag "release/v${REL_VERSION}"
-              git push github "release/v${REL_VERSION}"
+            if [ -n "${TAG}" ]; then
+              echo "pushing tag ${TAG}"
+              git tag "${TAG}"
+              git push github "${TAG}"
+            else
+              echo "no tag input, skip tagging"
             fi
