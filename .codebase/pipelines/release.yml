@@ -1,0 +1,56 @@
+name: release-to-github
+trigger: manual
+inputs:
+  version:
+    type: string
+    description: '目标版本 v{a.b.c} 或 a.b.c,例如 0.0.3 / v0.0.3'
+    required: true
+  skip_version:
+    type: boolean
+    description: '跳过"新版本必须更大"校验(格式仍会校验)'
+    required: false
+    default: false
+  create_tag:
+    type: boolean
+    description: '是否同时推送 release/v{version} tag 到 GitHub'
+    required: false
+    default: true
+jobs:
+  release:
+    name: Sync to GitHub main
+    image: hub.byted.org/codebase/ci_debian_bullseye
+    steps:
+      - name: checkout
+        uses: actions/checkout
+      - name: prepare-and-push
+        envs:
+          VERSION: ${{ Event.Inputs.version }}
+          SKIP_VERSION: ${{ Event.Inputs.skip_version }}
+          CREATE_TAG: ${{ Event.Inputs.create_tag }}
+          GITHUB_TOKEN: ${{ GITHUB_TOKEN }}
+        commands:
+          - apt-get update && apt-get install -y python3 git
+          - git config user.name "pico-ci-bot"
+          - git config user.email "pico-ci-bot@bytedance.com"
+          # 需求 0:从当前 main 切独立分支
+          - git checkout -b "release/prep-$(date +%s)"
+          # 需求 1+2+校验:补版权头 + 改版本 + 版本校验
+          - |
+            if [ "${SKIP_VERSION}" = "true" ]; then
+              python3 .codebase/scripts/prepare_release.py "${VERSION}" --skip-version
+            else
+              python3 .codebase/scripts/prepare_release.py "${VERSION}"
+            fi
+          - export REL_VERSION="$(cat .release_version)"
+          - rm -f .release_version
+          - git add -A
+          - 'git commit -m "chore(release): headers & bump to ${REL_VERSION}" || echo "nothing to commit"'
+          # 需求 3:直接推到 GitHub main
+          - git remote add github "https://x-access-token:${GITHUB_TOKEN}@github.com/Pico-Developer/Unity-MCP-Extensions.git"
+          - git push github "HEAD:main"
+          # 需求 4:按需打 tag release/v{version} 并推送
+          - |
+            if [ "${CREATE_TAG}" = "true" ]; then
+              git tag "release/v${REL_VERSION}"
+              git push github "release/v${REL_VERSION}"
+            fi
