@@ -10,11 +10,11 @@ inputs:
     description: '跳过"新版本必须更大"校验(格式仍会校验)'
     required: false
     default: false
-  create_tag:
-    type: boolean
-    description: '是否同时推送 release/v{version} tag 到 GitHub'
+  tag:
+    type: string
+    description: 'tag 名,例如 release/v0.0.3;不填则不打 tag'
     required: false
-    default: true
+    default: ''
   from_branch:
     type: string
     description: 'Codebase 源分支(单个),为空默认 main'
@@ -32,7 +32,7 @@ jobs:
     envs:
       VERSION: ${{ Event.Inputs.version }}
       SKIP_VERSION: ${{ Event.Inputs.skip_version }}
-      CREATE_TAG: ${{ Event.Inputs.create_tag }}
+      CREATE_TAG: ${{ Event.Inputs.tag }}
       FROM_BRANCH: ${{ Event.Inputs.from_branch }}
       TO_BRANCH: ${{ Event.Inputs.to_branch }}
       GITHUB_TOKEN: ${{ GITHUB_TOKEN }}
