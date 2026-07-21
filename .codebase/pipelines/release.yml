@@ -33,6 +33,8 @@ jobs:
       VERSION: ${{ Event.Inputs.version }}
       SKIP_VERSION: ${{ Event.Inputs.skip_version }}
       CREATE_TAG: ${{ Event.Inputs.create_tag }}
+      FROM_BRANCH: ${{ Event.Inputs.from_branch }}
+      TO_BRANCH: ${{ Event.Inputs.to_branch }}
       GITHUB_TOKEN: ${{ GITHUB_TOKEN }}
     steps:
       - name: checkout
