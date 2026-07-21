@@ -15,6 +15,16 @@ inputs:
     description: '是否同时推送 release/v{version} tag 到 GitHub'
     required: false
     default: true
+  from_branch:
+    type: string
+    description: 'Codebase 源分支(单个),为空默认 main'
+    required: false
+    default: main
+  to_branch:
+    type: string
+    description: 'GitHub 目标分支,可填多个用空格分隔,为空默认 main'
+    required: false
+    default: main
 jobs:
   release:
     name: Sync to GitHub main
