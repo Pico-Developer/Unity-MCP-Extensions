@@ -19,15 +19,15 @@ jobs:
   release:
     name: Sync to GitHub main
     image: hub.byted.org/codebase/ci_debian_bullseye
+    envs:
+      VERSION: ${{ Event.Inputs.version }}
+      SKIP_VERSION: ${{ Event.Inputs.skip_version }}
+      CREATE_TAG: ${{ Event.Inputs.create_tag }}
+      GITHUB_TOKEN: ${{ GITHUB_TOKEN }}
     steps:
       - name: checkout
         uses: actions/checkout
       - name: prepare-and-push
-        envs:
-          VERSION: ${{ Event.Inputs.version }}
-          SKIP_VERSION: ${{ Event.Inputs.skip_version }}
-          CREATE_TAG: ${{ Event.Inputs.create_tag }}
-          GITHUB_TOKEN: ${{ GITHUB_TOKEN }}
         commands:
           - apt-get update && apt-get install -y python3 git
           - git config user.name "pico-ci-bot"
