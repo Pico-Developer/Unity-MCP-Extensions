@@ -7,6 +7,7 @@
 #
 # 默认只做本地处理(切临时分支 + 补版权头 + 改版本 + 提交),不推送 GitHub。
 # 只有显式加 --push 才会推送(且推送前会剥离 .codebase / .scripts)。
+# 无论成功/失败/中断,脚本结束时都会自动切回起始分支。
 #
 # 用法:
 #   bash .scripts/release_local.sh 0.0.3
@@ -38,12 +39,30 @@ set -euo pipefail
 GITHUB_HTTPS="https://github.com/Pico-Developer/Unity-MCP-Extensions.git"
 GITHUB_SSH="git@github.com:Pico-Developer/Unity-MCP-Extensions.git"
 
-usage() { sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; }
 
 # ---- 定位仓库根 ----
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
   echo "ERROR: 当前不在 git 仓库内" >&2; exit 1; }
 cd "$REPO_ROOT"
+
+# ---- 记录起始分支/位置,结束时(无论成败)自动切回 ----
+ORIG_REF="$(git symbolic-ref -q --short HEAD || git rev-parse HEAD)"
+restore_branch() {
+  local code=$?
+  if [ -n "${ORIG_REF:-}" ]; then
+    local cur
+    cur="$(git symbolic-ref -q --short HEAD || git rev-parse HEAD)"
+    if [ "$cur" != "$ORIG_REF" ]; then
+      echo ""
+      echo "[cleanup] 切回起始分支/位置: $ORIG_REF"
+      git checkout -q "$ORIG_REF" 2>/dev/null \
+        || echo "[cleanup] 警告: 无法切回 $ORIG_REF(工作区可能有未提交改动),请手动处理" >&2
+    fi
+  fi
+  exit $code
+}
+trap restore_branch EXIT
 
 PREPARE="$REPO_ROOT/.codebase/scripts/prepare_release.py"
 [ -f "$PREPARE" ] || { echo "ERROR: 找不到 $PREPARE" >&2; exit 1; }
