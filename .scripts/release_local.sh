@@ -13,6 +13,7 @@
 #   bash .scripts/release_local.sh v0.0.3 --skip-version
 #   bash .scripts/release_local.sh 0.0.4 --push --tag release/v0.0.4
 #   bash .scripts/release_local.sh 0.0.4 --push --to-branch "main dev"
+#   bash .scripts/release_local.sh 0.0.4 --push --token github_pat_xxx
 #
 # 参数(对齐 pipeline inputs):
 #   <version>          目标版本 v{a.b.c} 或 a.b.c(必填)
@@ -22,15 +23,18 @@
 #   --to-branch <b...> push 目标分支,可空格分隔多个,默认 main
 #   --push             真正推送到 GitHub(默认关闭 = 相当于 skip_push=true)
 #   --no-branch        不切临时分支,原地在当前分支处理
+#   --token <pat>      GitHub PAT;等价于设置环境变量 GITHUB_TOKEN(二选一)
 #   -h|--help          显示帮助
 #
-# push 需要环境变量 GITHUB_TOKEN(对 Pico-Developer/Unity-MCP-Extensions 有 push 权限的 PAT)
+# push 需要 GitHub PAT(对 Pico-Developer/Unity-MCP-Extensions 有 push 权限),两种给法二选一:
+#   1) 环境变量:  GITHUB_TOKEN=github_pat_xxx bash .scripts/release_local.sh 0.0.4 --push
+#   2) 参数:      bash .scripts/release_local.sh 0.0.4 --push --token github_pat_xxx
 # ==============================================================================
 set -euo pipefail
 
 GITHUB_REPO="https://github.com/Pico-Developer/Unity-MCP-Extensions.git"
 
-usage() { sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; }
 
 # ---- 定位仓库根 ----
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
@@ -48,6 +52,7 @@ FROM_BRANCH=""
 TO_BRANCH="main"
 DO_PUSH=false
 NO_BRANCH=false
+TOKEN_ARG=""
 
 # ---- 解析参数 ----
 while [ $# -gt 0 ]; do
@@ -58,6 +63,7 @@ while [ $# -gt 0 ]; do
     --to-branch)    TO_BRANCH="$2"; shift 2;;
     --push)         DO_PUSH=true; shift;;
     --no-branch)    NO_BRANCH=true; shift;;
+    --token)        TOKEN_ARG="$2"; shift 2;;
     -h|--help)      usage; exit 0;;
     -*)             echo "未知参数: $1" >&2; usage; exit 1;;
     *)              if [ -z "$VERSION" ]; then VERSION="$1"; shift;
@@ -102,7 +108,16 @@ if [ "$DO_PUSH" = false ]; then
   exit 0
 fi
 
-: "${GITHUB_TOKEN:?需要设置环境变量 GITHUB_TOKEN(对 GitHub 仓库有 push 权限的 PAT)}"
+# token 两种给法:--token 参数 或 环境变量 GITHUB_TOKEN(参数优先)
+if [ -n "$TOKEN_ARG" ]; then
+  GITHUB_TOKEN="$TOKEN_ARG"
+fi
+if [ -z "${GITHUB_TOKEN:-}" ]; then
+  echo "ERROR: --push 需要 GitHub PAT,两种给法二选一:" >&2
+  echo "  1) 环境变量:  GITHUB_TOKEN=github_pat_xxx bash .scripts/release_local.sh $VERSION --push" >&2
+  echo "  2) 参数:      bash .scripts/release_local.sh $VERSION --push --token github_pat_xxx" >&2
+  exit 1
+fi
 
 # push 前剥离内部目录:.codebase / .scripts 不进 GitHub(与 pipeline 一致)
 git rm -r --cached .codebase .scripts 2>/dev/null || true
