@@ -27,6 +27,7 @@
 #   --no-branch        不切临时分支,原地在当前分支处理
 #   --token <pat>      GitHub PAT;等价于设置环境变量 GITHUB_TOKEN(与 --ssh 二选一)
 #   --ssh              用 SSH 推送(git@github.com:...),靠本机 SSH key 认证,免 token
+#   --force            push 用 --force-with-lease 覆盖远端(解决 non-fast-forward)
 #   -h|--help          显示帮助
 #
 # push 需要对 Pico-Developer/Unity-MCP-Extensions 有 push 权限,三种给法任选其一:
@@ -39,7 +40,7 @@ set -euo pipefail
 GITHUB_HTTPS="https://github.com/Pico-Developer/Unity-MCP-Extensions.git"
 GITHUB_SSH="git@github.com:Pico-Developer/Unity-MCP-Extensions.git"
 
-usage() { sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'; }
 
 # ---- 定位仓库根 ----
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
@@ -77,6 +78,7 @@ DO_PUSH=false
 NO_BRANCH=false
 TOKEN_ARG=""
 USE_SSH=false
+FORCE=false
 
 # ---- 解析参数 ----
 while [ $# -gt 0 ]; do
@@ -89,6 +91,7 @@ while [ $# -gt 0 ]; do
     --no-branch)    NO_BRANCH=true; shift;;
     --token)        TOKEN_ARG="$2"; shift 2;;
     --ssh)          USE_SSH=true; shift;;
+    --force)        FORCE=true; shift;;
     -h|--help)      usage; exit 0;;
     -*)             echo "未知参数: $1" >&2; usage; exit 1;;
     *)              if [ -z "$VERSION" ]; then VERSION="$1"; shift;
@@ -158,9 +161,14 @@ git commit -m "chore(release): strip internal dirs before GitHub push" || true
 
 git remote remove github 2>/dev/null || true
 git remote add github "$REMOTE_URL"
+PUSH_OPTS=""
+if [ "$FORCE" = true ]; then
+  PUSH_OPTS="--force-with-lease"
+  echo "[push] --force:使用 --force-with-lease 安全覆盖远端"
+fi
 for b in ${TO_BRANCH}; do
   echo "pushing to github ${b}"
-  git push github "HEAD:${b}"
+  git push $PUSH_OPTS github "HEAD:${b}"
 done
 if [ -n "$TAG" ]; then
   echo "pushing tag ${TAG}"
