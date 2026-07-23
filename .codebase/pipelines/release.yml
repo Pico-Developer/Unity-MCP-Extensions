@@ -25,6 +25,11 @@ inputs:
     description: 'GitHub 目标分支,可填多个用空格分隔,为空默认 main'
     required: false
     default: main
+  skip_push:
+    type: boolean
+    description: '为 true 时只做本地处理(补版权头/改版本/提交),不推送到 GitHub'
+    required: false
+    default: false
 jobs:
   release:
     name: Sync to GitHub main
@@ -35,6 +40,7 @@ jobs:
       TAG: ${{ Event.Inputs.tag }}
       FROM_BRANCH: ${{ Event.Inputs.from_branch }}
       TO_BRANCH: ${{ Event.Inputs.to_branch }}
+      SKIP_PUSH: ${{ Event.Inputs.skip_push }}
       GITHUB_TOKEN: ${{ GITHUB_TOKEN }}
     steps:
       - name: checkout
@@ -59,19 +65,23 @@ jobs:
           - rm -f .release_version
           - git add -A
           - 'git commit -m "chore(release): headers & bump to ${REL_VERSION}" || echo "nothing to commit"'
-          # 需求 3:推送到 to_branch(默认 main,可多个用空格分隔)
-          - git remote add github "https://x-access-token:${GITHUB_TOKEN}@github.com/Pico-Developer/Unity-MCP-Extensions.git"
+          # 需求 5:skip_push=true 时只做本地处理,不推送到 GitHub
           - |
-            for b in ${TO_BRANCH}; do
-              echo "pushing to github ${b}"
-              git push github "HEAD:${b}"
-            done
-          # 需求 4:传了 tag 则打该名 tag 并推送,不传则跳过
-          - |
-            if [ -n "${TAG}" ]; then
-              echo "pushing tag ${TAG}"
-              git tag "${TAG}"
-              git push github "${TAG}"
+            if [ "${SKIP_PUSH}" = "true" ]; then
+              echo "skip_push=true, 跳过推送到 GitHub(仅本地补版权头/改版本/提交)"
             else
-              echo "no tag input, skip tagging"
+              # 需求 3:推送到 to_branch(默认 main,可多个用空格分隔)
+              git remote add github "https://x-access-token:${GITHUB_TOKEN}@github.com/Pico-Developer/Unity-MCP-Extensions.git"
+              for b in ${TO_BRANCH}; do
+                echo "pushing to github ${b}"
+                git push github "HEAD:${b}"
+              done
+              # 需求 4:传了 tag 则打该名 tag 并推送,不传则跳过
+              if [ -n "${TAG}" ]; then
+                echo "pushing tag ${TAG}"
+                git tag "${TAG}"
+                git push github "${TAG}"
+              else
+                echo "no tag input, skip tagging"
+              fi
             fi
