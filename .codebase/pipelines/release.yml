@@ -70,7 +70,11 @@ jobs:
             if [ "${SKIP_PUSH}" = "true" ]; then
               echo "skip_push=true, 跳过推送到 GitHub(仅本地补版权头/改版本/提交)"
             else
+              # push 前剥离内部目录:.codebase / .scripts 不进 GitHub
+              git rm -r --cached .codebase .scripts 2>/dev/null || true
+              git commit -m "chore(release): strip internal dirs before GitHub push" || true
               # 需求 3:推送到 to_branch(默认 main,可多个用空格分隔)
+              git remote remove github 2>/dev/null || true
               git remote add github "https://x-access-token:${GITHUB_TOKEN}@github.com/Pico-Developer/Unity-MCP-Extensions.git"
               for b in ${TO_BRANCH}; do
                 echo "pushing to github ${b}"
