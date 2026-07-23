@@ -14,6 +14,7 @@
 #   bash .scripts/release_local.sh 0.0.4 --push --tag release/v0.0.4
 #   bash .scripts/release_local.sh 0.0.4 --push --to-branch "main dev"
 #   bash .scripts/release_local.sh 0.0.4 --push --token github_pat_xxx
+#   bash .scripts/release_local.sh 0.0.4 --push --ssh
 #
 # 参数(对齐 pipeline inputs):
 #   <version>          目标版本 v{a.b.c} 或 a.b.c(必填)
@@ -23,18 +24,21 @@
 #   --to-branch <b...> push 目标分支,可空格分隔多个,默认 main
 #   --push             真正推送到 GitHub(默认关闭 = 相当于 skip_push=true)
 #   --no-branch        不切临时分支,原地在当前分支处理
-#   --token <pat>      GitHub PAT;等价于设置环境变量 GITHUB_TOKEN(二选一)
+#   --token <pat>      GitHub PAT;等价于设置环境变量 GITHUB_TOKEN(与 --ssh 二选一)
+#   --ssh              用 SSH 推送(git@github.com:...),靠本机 SSH key 认证,免 token
 #   -h|--help          显示帮助
 #
-# push 需要 GitHub PAT(对 Pico-Developer/Unity-MCP-Extensions 有 push 权限),两种给法二选一:
+# push 需要对 Pico-Developer/Unity-MCP-Extensions 有 push 权限,三种给法任选其一:
 #   1) 环境变量:  GITHUB_TOKEN=github_pat_xxx bash .scripts/release_local.sh 0.0.4 --push
 #   2) 参数:      bash .scripts/release_local.sh 0.0.4 --push --token github_pat_xxx
+#   3) SSH(推荐): bash .scripts/release_local.sh 0.0.4 --push --ssh   # 免 token,靠本机 SSH key
 # ==============================================================================
 set -euo pipefail
 
-GITHUB_REPO="https://github.com/Pico-Developer/Unity-MCP-Extensions.git"
+GITHUB_HTTPS="https://github.com/Pico-Developer/Unity-MCP-Extensions.git"
+GITHUB_SSH="git@github.com:Pico-Developer/Unity-MCP-Extensions.git"
 
-usage() { sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; }
 
 # ---- 定位仓库根 ----
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
@@ -53,6 +57,7 @@ TO_BRANCH="main"
 DO_PUSH=false
 NO_BRANCH=false
 TOKEN_ARG=""
+USE_SSH=false
 
 # ---- 解析参数 ----
 while [ $# -gt 0 ]; do
@@ -64,6 +69,7 @@ while [ $# -gt 0 ]; do
     --push)         DO_PUSH=true; shift;;
     --no-branch)    NO_BRANCH=true; shift;;
     --token)        TOKEN_ARG="$2"; shift 2;;
+    --ssh)          USE_SSH=true; shift;;
     -h|--help)      usage; exit 0;;
     -*)             echo "未知参数: $1" >&2; usage; exit 1;;
     *)              if [ -z "$VERSION" ]; then VERSION="$1"; shift;
@@ -108,15 +114,23 @@ if [ "$DO_PUSH" = false ]; then
   exit 0
 fi
 
-# token 两种给法:--token 参数 或 环境变量 GITHUB_TOKEN(参数优先)
-if [ -n "$TOKEN_ARG" ]; then
-  GITHUB_TOKEN="$TOKEN_ARG"
-fi
-if [ -z "${GITHUB_TOKEN:-}" ]; then
-  echo "ERROR: --push 需要 GitHub PAT,两种给法二选一:" >&2
-  echo "  1) 环境变量:  GITHUB_TOKEN=github_pat_xxx bash .scripts/release_local.sh $VERSION --push" >&2
-  echo "  2) 参数:      bash .scripts/release_local.sh $VERSION --push --token github_pat_xxx" >&2
-  exit 1
+# 确定远端 URL:--ssh 走 SSH(免 token);否则走 HTTPS+token
+if [ "$USE_SSH" = true ]; then
+  REMOTE_URL="$GITHUB_SSH"
+  echo "[push] 使用 SSH 远端,靠本机 SSH key 认证(无需 token)"
+else
+  # token 两种给法:--token 参数 或 环境变量 GITHUB_TOKEN(参数优先)
+  if [ -n "$TOKEN_ARG" ]; then
+    GITHUB_TOKEN="$TOKEN_ARG"
+  fi
+  if [ -z "${GITHUB_TOKEN:-}" ]; then
+    echo "ERROR: --push 需要凭证,三种给法任选其一:" >&2
+    echo "  1) 环境变量:  GITHUB_TOKEN=github_pat_xxx bash .scripts/release_local.sh $VERSION --push" >&2
+    echo "  2) 参数:      bash .scripts/release_local.sh $VERSION --push --token github_pat_xxx" >&2
+    echo "  3) SSH(推荐): bash .scripts/release_local.sh $VERSION --push --ssh" >&2
+    exit 1
+  fi
+  REMOTE_URL="https://x-access-token:${GITHUB_TOKEN}@github.com/Pico-Developer/Unity-MCP-Extensions.git"
 fi
 
 # push 前剥离内部目录:.codebase / .scripts 不进 GitHub(与 pipeline 一致)
@@ -124,7 +138,7 @@ git rm -r --cached .codebase .scripts 2>/dev/null || true
 git commit -m "chore(release): strip internal dirs before GitHub push" || true
 
 git remote remove github 2>/dev/null || true
-git remote add github "https://x-access-token:${GITHUB_TOKEN}@github.com/Pico-Developer/Unity-MCP-Extensions.git"
+git remote add github "$REMOTE_URL"
 for b in ${TO_BRANCH}; do
   echo "pushing to github ${b}"
   git push github "HEAD:${b}"
