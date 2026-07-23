@@ -163,6 +163,9 @@ git remote remove github 2>/dev/null || true
 git remote add github "$REMOTE_URL"
 PUSH_OPTS=""
 if [ "$FORCE" = true ]; then
+  # --force-with-lease 需要远端跟踪引用作对比基准;刚 add 的 remote 未 fetch 会报 stale info
+  echo "[push] --force:先 fetch github 以建立对比基准"
+  git fetch github 2>/dev/null || true
   PUSH_OPTS="--force-with-lease"
   echo "[push] --force:使用 --force-with-lease 安全覆盖远端"
 fi
