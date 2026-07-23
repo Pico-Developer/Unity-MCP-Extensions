@@ -73,3 +73,8 @@ crashlytics-build.properties
 
 .DS_Store
 *.meta
+
+# AI tool directories
+.trae/
+.claude/
+.codex/
