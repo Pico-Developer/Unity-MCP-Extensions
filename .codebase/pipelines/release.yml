@@ -50,16 +50,20 @@ jobs:
           - apt-get update && apt-get install -y python3 git
           - git config user.name "pico-ci-bot"
           - git config user.email "pico-ci-bot@bytedance.com"
+          # 关键:切分支前把 prepare_release.py 复制到 /tmp。
+          # from_branch(如 release/vX.Y.Z)可能不含 .codebase/ 目录,checkout 后脚本会消失,
+          # 导致 python3 .codebase/scripts/prepare_release.py 报 No such file or directory。
+          - cp .codebase/scripts/prepare_release.py /tmp/prepare_release.py
           # 需求 0:从 from_branch(默认 main)切独立分支
           - git fetch origin "${FROM_BRANCH}"
           - git checkout -B "${FROM_BRANCH}" "origin/${FROM_BRANCH}"
           - git checkout -b "release/prep-$(date +%s)"
-          # 需求 1+2+校验:补版权头 + 改版本 + 版本校验
+          # 需求 1+2+校验:补版权头 + 改版本 + 版本校验(用切分支前复制出的 /tmp 副本)
           - |
             if [ "${SKIP_VERSION}" = "true" ]; then
-              python3 .codebase/scripts/prepare_release.py "${VERSION}" --skip-version
+              python3 /tmp/prepare_release.py "${VERSION}" --skip-version
             else
-              python3 .codebase/scripts/prepare_release.py "${VERSION}"
+              python3 /tmp/prepare_release.py "${VERSION}"
             fi
           - export REL_VERSION="$(cat .release_version)"
           - rm -f .release_version
