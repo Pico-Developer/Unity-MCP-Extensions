@@ -63,6 +63,22 @@ jobs:
             fi
           - export REL_VERSION="$(cat .release_version)"
           - rm -f .release_version
+          # 需求 3:确保 push 出去的 package.json version = 传入的版本号(显式强制写入)
+          - |
+            python3 - "${REL_VERSION}" <<'PY'
+            import json, sys
+            ver = sys.argv[1]
+            with open("package.json", "r", encoding="utf-8") as f:
+                pkg = json.load(f)
+            if pkg.get("version") != ver:
+                pkg["version"] = ver
+                with open("package.json", "w", encoding="utf-8") as f:
+                    json.dump(pkg, f, indent=2, ensure_ascii=False)
+                    f.write("\n")
+                print(f"[version] package.json 强制写入 version = {ver}")
+            else:
+                print(f"[version] package.json version 已是 {ver}")
+            PY
           - git add -A
           - 'git commit -m "chore(release): headers & bump to ${REL_VERSION}" || echo "nothing to commit"'
           # 需求 5:skip_push=true 时只做本地处理,不推送到 GitHub
@@ -70,9 +86,28 @@ jobs:
             if [ "${SKIP_PUSH}" = "true" ]; then
               echo "skip_push=true, 跳过推送到 GitHub(仅本地补版权头/改版本/提交)"
             else
-              # push 前剥离内部目录:.codebase / .scripts 不进 GitHub
-              git rm -r --cached .codebase .scripts 2>/dev/null || true
-              git commit -m "chore(release): strip internal dirs before GitHub push" || true
+              # 需求 1:push 前剥离内部目录 .codebase / .scripts 不进 GitHub。
+              # 注意:git rm 传多个 pathspec 时是"原子"的——只要其中一个在索引里不存在,
+              # 整条命令会失败且什么都不删,配合 "|| true" 被静默吞掉,曾导致 .codebase 泄漏。
+              # 这里改成逐个独立剥离,并用 --ignore-unmatch 保证互不影响。
+              STRIPPED=false
+              for d in .codebase .scripts; do
+                if git rm -r --cached --ignore-unmatch "$d" >/dev/null 2>&1; then
+                  if [ -n "$(git status --porcelain -- "$d")" ]; then
+                    echo "strip: removed $d from index"; STRIPPED=true
+                  fi
+                fi
+              done
+              if [ "$STRIPPED" = "true" ]; then
+                git commit -m "chore(release): strip internal dirs before GitHub push" || true
+              fi
+              # 断言:确认内部目录确实不在待推送内容里,否则中止,避免泄漏到 GitHub
+              for d in .codebase .scripts; do
+                if git ls-files --error-unmatch "$d" >/dev/null 2>&1; then
+                  echo "ERROR: $d still tracked, abort push to avoid leaking internal dirs" >&2
+                  exit 1
+                fi
+              done
               # 需求 3:推送到 to_branch(默认 main,可多个用空格分隔)
               git remote remove github 2>/dev/null || true
               git remote add github "https://x-access-token:${GITHUB_TOKEN}@github.com/Pico-Developer/Unity-MCP-Extensions.git"
