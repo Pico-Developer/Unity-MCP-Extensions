@@ -55,6 +55,8 @@ cd "$REPO_ROOT"
 ORIG_REF="$(git symbolic-ref -q --short HEAD || git rev-parse HEAD)"
 restore_branch() {
   local code=$?
+  # 清理临时的 prepare_release.py 副本(在切分支前复制出来,避免 checkout 到不含 .codebase 的分支后丢失)
+  [ -n "${PREPARE_TMP:-}" ] && rm -f "$PREPARE_TMP" 2>/dev/null || true
   if [ -n "${ORIG_REF:-}" ]; then
     local cur
     cur="$(git symbolic-ref -q --short HEAD || git rev-parse HEAD)"
@@ -71,6 +73,13 @@ trap restore_branch EXIT
 
 PREPARE="$REPO_ROOT/.codebase/scripts/prepare_release.py"
 [ -f "$PREPARE" ] || { echo "ERROR: 找不到 $PREPARE" >&2; exit 1; }
+
+# ---- 关键:切分支前把 prepare_release.py 复制到临时文件 ----
+# --from release/vX.Y.Z 等分支可能不包含 .codebase/ 目录,checkout 过去后 $PREPARE
+# 会随工作区消失,导致后面 python3 "$PREPARE" 报 [Errno 2] No such file or directory。
+# 这里先复制到仓库外的临时文件,后续统一用 $PREPARE_TMP 执行,不受切分支影响。
+PREPARE_TMP="$(mktemp -t prepare_release.XXXXXX.py)"
+cp "$PREPARE" "$PREPARE_TMP"
 
 # ---- 默认参数 ----
 VERSION=""
@@ -140,9 +149,9 @@ fi
 
 # ---- 需求 1+3+校验:补版权头 + 改版本 ----
 if [ "$SKIP_VERSION" = true ]; then
-  python3 "$PREPARE" "$VERSION" --skip-version
+  python3 "$PREPARE_TMP" "$VERSION" --skip-version
 else
-  python3 "$PREPARE" "$VERSION"
+  python3 "$PREPARE_TMP" "$VERSION"
 fi
 REL_VERSION="$(cat .release_version)"
 rm -f .release_version
