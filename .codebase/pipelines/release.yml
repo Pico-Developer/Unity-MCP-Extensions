@@ -3,8 +3,9 @@ trigger: manual
 inputs:
   version:
     type: string
-    description: '目标版本 v{a.b.c} 或 a.b.c,例如 0.0.3 / v0.0.3'
-    required: true
+    description: '目标版本 v{a.b.c} 或 a.b.c,例如 0.0.3 / v0.0.3。为空时先从 from_branch 的 release/vX.Y.Z 推导,再兜底读 package.json 的 version'
+    required: false
+    default: ''
   skip_version:
     type: boolean
     description: '跳过"新版本必须更大"校验(格式仍会校验)'
@@ -58,12 +59,32 @@ jobs:
           - git fetch origin "${FROM_BRANCH}"
           - git checkout -B "${FROM_BRANCH}" "origin/${FROM_BRANCH}"
           - git checkout -b "release/prep-$(date +%s)"
+          # version 兜底:为空时先从 from_branch 的 release/vX.Y.Z 推导,再兜底读 package.json。
+          # 与本地脚本 release_local.sh 的推导优先级保持一致:显式传 > 分支名 > package.json。
+          - |
+            RESOLVED_VERSION="${VERSION}"
+            if [ -z "${RESOLVED_VERSION}" ]; then
+              if echo "${FROM_BRANCH}" | grep -qE '^release/[vV]?[0-9]+\.[0-9]+\.[0-9]+$'; then
+                RESOLVED_VERSION="$(echo "${FROM_BRANCH}" | sed -E 's#^release/[vV]?([0-9]+\.[0-9]+\.[0-9]+)$#\1#')"
+                echo "[version] 未显式传 version,从分支名推导得到: ${RESOLVED_VERSION}"
+              elif [ -f package.json ]; then
+                RESOLVED_VERSION="$(python3 -c 'import json;print(json.load(open("package.json")).get("version",""))')"
+                echo "[version] 未显式传 version,兜底读 package.json version: ${RESOLVED_VERSION}"
+              fi
+            fi
+            if [ -z "${RESOLVED_VERSION}" ]; then
+              echo "ERROR: 未提供 version,既无法从 from_branch 的 release/vX.Y.Z 推导,也无法从 package.json 读取" >&2
+              exit 1
+            fi
+            export RESOLVED_VERSION
+            echo "${RESOLVED_VERSION}" > /tmp/.resolved_version
+          - export RESOLVED_VERSION="$(cat /tmp/.resolved_version)"
           # 需求 1+2+校验:补版权头 + 改版本 + 版本校验(用切分支前复制出的 /tmp 副本)
           - |
             if [ "${SKIP_VERSION}" = "true" ]; then
-              python3 /tmp/prepare_release.py "${VERSION}" --skip-version
+              python3 /tmp/prepare_release.py "${RESOLVED_VERSION}" --skip-version
             else
-              python3 /tmp/prepare_release.py "${VERSION}"
+              python3 /tmp/prepare_release.py "${RESOLVED_VERSION}"
             fi
           - export REL_VERSION="$(cat .release_version)"
           - rm -f .release_version
