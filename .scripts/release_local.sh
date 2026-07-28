@@ -15,16 +15,16 @@
 #   bash .scripts/release_local.sh 0.0.4 --push --tag release/v0.0.4
 #   bash .scripts/release_local.sh 0.0.4 --push --to "main dev"
 #   bash .scripts/release_local.sh 0.0.4 --push --from release/v0.0.4 --to release/v0.0.4
-#   # version 省略时会从 --from / --to 的 release/vX.Y.Z 分支名推导:
-#   bash .scripts/release_local.sh --skip-version --from release/v0.0.3 --to release/v0.0.3 --push --force
+#   # version 为必传参数,不传会直接报错:
+#   bash .scripts/release_local.sh 0.0.3 --skip-version --from release/v0.0.3 --to release/v0.0.3 --push --force
 #   bash .scripts/release_local.sh 0.0.4 --push --token github_pat_xxx   # 走 HTTPS
 #   bash .scripts/release_local.sh --doctor --from main --to main        # 只体检,不改动
 #
 # 参数(对齐 pipeline inputs):
-#   [version]          目标版本 v{a.b.c} 或 a.b.c(可选);会写入 push 出去的
-#                      package.json 的 version 字段。省略时先从 --from / --to 的
-#                      release/vX.Y.Z 分支名推导,推不出则兜底读当前 package.json
-#                      的 version 字段(仍推不出才报错要求显式传入)。
+#   <version>          【必传】目标版本 v{a.b.c} 或 a.b.c;会写入 push 出去的
+#                      package.json 的 version 字段。不传直接报错退出
+#                      (不再从分支名或 package.json 推导,发布版本必须显式指定)。
+#                      --doctor 只读体检模式除外(无需传 version)。
 #   --doctor           只做只读环境体检(git/脚本/工作区/版本/认证/分支可达),
 #                      不切分支、不改文件、不提交、不推送;通过 exit 0,否则 exit 1
 #   --skip-version     跳过"新版本必须更大"校验(格式仍校验)
@@ -118,19 +118,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# ---- 需求 2:version 省略时,从 --from / --to 的 release/vX.Y.Z 分支名推导 ----
-# 命令里已经给了 --from release/v0.0.3 --to release/v0.0.3,再重复写一遍 0.0.3 是冗余的。
-# 优先看 --from,再看 --to(可能空格分隔多个,逐个匹配),取第一个 release/vX.Y.Z 命中。
-derive_version_from_branch() {
-  local b
-  for b in $FROM_BRANCH $TO_BRANCH; do
-    if [[ "$b" =~ ^release/[vV]?([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-      echo "${BASH_REMATCH[1]}"; return 0
-    fi
-  done
-  return 1
-}
-# 兜底:从当前工作区 package.json 读 version 字段(用于 --from main 这类无法从分支名推导的场景)
+# 兜底:从当前工作区 package.json 读 version 字段(仅 --doctor 体检时用于展示当前版本)
 read_pkg_version() {
   [ -f package.json ] || return 1
   python3 - <<'PY' 2>/dev/null
@@ -240,16 +228,13 @@ if [ "$DOCTOR" = true ]; then
   exit $?
 fi
 
+# ---- 需求:version 为必传参数 ----
+# 不再从 --from/--to 的分支名推导,也不再兜底读 package.json;
+# 未显式传入版本号一律报错退出,确保每次发布的版本号都是调用方明确指定的。
 if [ -z "$VERSION" ]; then
-  if VERSION="$(derive_version_from_branch)"; then
-    echo "[version] 未显式传 version,从分支名推导得到: $VERSION"
-  elif VERSION="$(read_pkg_version)"; then
-    echo "[version] 未显式传 version,也无法从分支名推导,兜底读 package.json version: $VERSION"
-  else
-    echo "ERROR: 未提供 version,既无法从 --from/--to 的 release/vX.Y.Z 分支名推导," >&2
-    echo "       也无法从 package.json 读取 version。请显式传入版本号。" >&2
-    usage; exit 1
-  fi
+  echo "ERROR: 未提供 version(必传)。请显式传入目标版本号,例如:" >&2
+  echo "       bash .scripts/release_local.sh 0.0.4 --from release/v0.0.4 --to release/v0.0.4 --push" >&2
+  usage; exit 1
 fi
 
 # ---- 需求 0:可选从 from-branch 切临时分支 ----
