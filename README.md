@@ -4,7 +4,7 @@ PICO XR feature construction APIs for Unity MCP agents. Idempotent, non-destruct
 
 ## Overview
 
-This Unity package exposes PICO XR building blocks as MCP (Model Context Protocol) tools, enabling AI agents (e.g. Unity AI Assistant) to programmatically configure XR scenes for PICO devices. It is designed to be used together with the **PICO Unity Integration SDK 6.0.x** and aligns its dependency baseline with that SDK (XR Interaction Toolkit **2.x**).
+This Unity package exposes PICO XR building blocks as MCP (Model Context Protocol) tools, enabling AI agents (e.g. Unity AI Assistant) to programmatically configure XR scenes for PICO devices. It is designed to be used together with the **PICO Unity Integration SDK 6.0.x** and aligns its dependency baseline with that SDK (XR Interaction Toolkit **3.x**).
 
 **Package name:** `com.bytedance.pico.mcp-extensions`  
 **Version:** 0.0.3  
@@ -16,7 +16,7 @@ This Unity package exposes PICO XR building blocks as MCP (Model Context Protoco
 | Dependency | Minimum Version |
 |---|---|
 | com.unity.xr.core-utils | 2.3.0 |
-| com.unity.xr.interaction.toolkit | 2.0.0 |
+| com.unity.xr.interaction.toolkit | 3.4.0 |
 | com.unity.inputsystem | 1.18.0 |
 | Unity AI Assistant (Unity.AI.MCP.Editor) | 2.x |
 | com.bytedance.pico.xr | 6.0.0 |
