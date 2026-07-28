@@ -17,7 +17,7 @@ This Unity package exposes PICO XR building blocks as MCP (Model Context Protoco
 |---|---|
 | com.unity.xr.core-utils | 2.3.0 |
 | com.unity.xr.interaction.toolkit | 2.0.0 |
-| com.unity.inputsystem | 1.7.0 |
+| com.unity.inputsystem | 1.18.0 |
 | Unity AI Assistant (Unity.AI.MCP.Editor) | 2.x |
 | com.bytedance.pico.xr | 6.0.0 |
 
