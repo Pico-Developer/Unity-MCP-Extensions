@@ -65,9 +65,10 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             Undo.RecordObject(cam, "PICO MCP VST configure camera");
             cam.clearFlags = CameraClearFlags.SolidColor;
             cam.backgroundColor = new Color(0, 0, 0, 0);
-
+#if ENABLE_PICO_XR_SDK
             if (cam.gameObject.GetComponent<PXR_CameraEffectBlock>() == null)
                 Undo.AddComponent<PXR_CameraEffectBlock>(cam.gameObject);
+#endif
             var m = new GameObject(MarkerChild);
             Undo.RegisterCreatedObjectUndo(m, "PICO MCP VST marker");
             m.transform.SetParent(origin.transform, false);
