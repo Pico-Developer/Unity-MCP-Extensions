@@ -8,7 +8,7 @@ This Unity package exposes PICO XR building blocks as MCP (Model Context Protoco
 
 **Package name:** `com.bytedance.pico.mcp-extensions`  
 **Version:** 0.0.3  
-**Unity:** 2022.3+  
+**Unity:** 6000.0+  
 **Author:** ByteDance PICO
 
 ## Requirements
