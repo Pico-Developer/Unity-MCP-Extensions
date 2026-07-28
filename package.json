@@ -8,6 +8,8 @@
   "dependencies": {
     "com.unity.xr.core-utils": "2.3.0",
     "com.unity.xr.interaction.toolkit": "3.4.0",
-    "com.unity.inputsystem": "1.18.0"
+    "com.unity.inputsystem": "1.18.0",
+    "com.bytedance.pico.xr": "6.0.0",
+    "com.unity.ai.assistant": "2.9.0-pre.2"
   }
 }
