@@ -7,7 +7,7 @@
   "author": { "name": "ByteDance PICO" },
   "dependencies": {
     "com.unity.xr.core-utils": "2.3.0",
-    "com.unity.xr.interaction.toolkit": "2.0.0",
+    "com.unity.xr.interaction.toolkit": "3.4.0",
     "com.unity.inputsystem": "1.18.0"
   }
 }
