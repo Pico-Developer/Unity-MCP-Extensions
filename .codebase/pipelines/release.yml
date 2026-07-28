@@ -3,8 +3,8 @@ trigger: manual
 inputs:
   version:
     type: string
-    description: '目标版本 v{a.b.c} 或 a.b.c,例如 0.0.3 / v0.0.3。为空时先从 from_branch 的 release/vX.Y.Z 推导,再兜底读 package.json 的 version'
-    required: false
+    description: '目标版本 v{a.b.c} 或 a.b.c,例如 0.0.3 / v0.0.3。必传:不再从分支名或 package.json 推导,为空直接报错'
+    required: true
     default: ''
   skip_version:
     type: boolean
@@ -59,21 +59,12 @@ jobs:
           - git fetch origin "${FROM_BRANCH}"
           - git checkout -B "${FROM_BRANCH}" "origin/${FROM_BRANCH}"
           - git checkout -b "release/prep-$(date +%s)"
-          # version 兜底:为空时先从 from_branch 的 release/vX.Y.Z 推导,再兜底读 package.json。
-          # 与本地脚本 release_local.sh 的推导优先级保持一致:显式传 > 分支名 > package.json。
+          # version 必传:不再从分支名或 package.json 推导,为空直接报错退出。
+          # 与本地脚本 release_local.sh 一致——发布版本必须由调用方显式指定。
           - |
             RESOLVED_VERSION="${VERSION}"
             if [ -z "${RESOLVED_VERSION}" ]; then
-              if echo "${FROM_BRANCH}" | grep -qE '^release/[vV]?[0-9]+\.[0-9]+\.[0-9]+$'; then
-                RESOLVED_VERSION="$(echo "${FROM_BRANCH}" | sed -E 's#^release/[vV]?([0-9]+\.[0-9]+\.[0-9]+)$#\1#')"
-                echo "[version] 未显式传 version,从分支名推导得到: ${RESOLVED_VERSION}"
-              elif [ -f package.json ]; then
-                RESOLVED_VERSION="$(python3 -c 'import json;print(json.load(open("package.json")).get("version",""))')"
-                echo "[version] 未显式传 version,兜底读 package.json version: ${RESOLVED_VERSION}"
-              fi
-            fi
-            if [ -z "${RESOLVED_VERSION}" ]; then
-              echo "ERROR: 未提供 version,既无法从 from_branch 的 release/vX.Y.Z 推导,也无法从 package.json 读取" >&2
+              echo "ERROR: 未提供 version(必传)。请在触发流水线时显式填写目标版本号(如 0.0.3 / v0.0.3)" >&2
               exit 1
             fi
             export RESOLVED_VERSION
