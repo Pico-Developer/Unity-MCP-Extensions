@@ -18,11 +18,15 @@
 #   # version 省略时会从 --from / --to 的 release/vX.Y.Z 分支名推导:
 #   bash .scripts/release_local.sh --skip-version --from release/v0.0.3 --to release/v0.0.3 --push --force
 #   bash .scripts/release_local.sh 0.0.4 --push --token github_pat_xxx   # 走 HTTPS
+#   bash .scripts/release_local.sh --doctor --from main --to main        # 只体检,不改动
 #
 # 参数(对齐 pipeline inputs):
 #   [version]          目标版本 v{a.b.c} 或 a.b.c(可选);会写入 push 出去的
-#                      package.json 的 version 字段。省略时从 --from / --to 的
-#                      release/vX.Y.Z 分支名推导(推不出则报错要求显式传入)。
+#                      package.json 的 version 字段。省略时先从 --from / --to 的
+#                      release/vX.Y.Z 分支名推导,推不出则兜底读当前 package.json
+#                      的 version 字段(仍推不出才报错要求显式传入)。
+#   --doctor           只做只读环境体检(git/脚本/工作区/版本/认证/分支可达),
+#                      不切分支、不改文件、不提交、不推送;通过 exit 0,否则 exit 1
 #   --skip-version     跳过"新版本必须更大"校验(格式仍校验)
 #   --tag <name>       推送时打的 tag 名,如 release/v0.0.3;不填不打 tag
 #   --from <b>         先从该分支拉取并 checkout(单个),默认用当前工作区(别名 --from-branch)
@@ -92,6 +96,7 @@ NO_BRANCH=false
 TOKEN_ARG=""
 USE_SSH=false
 FORCE=false
+DOCTOR=false
 
 # ---- 解析参数 ----
 while [ $# -gt 0 ]; do
@@ -105,6 +110,7 @@ while [ $# -gt 0 ]; do
     --token)               TOKEN_ARG="$2"; shift 2;;
     --ssh)                 USE_SSH=true; shift;;
     --force)               FORCE=true; shift;;
+    --doctor)              DOCTOR=true; shift;;
     -h|--help)             usage; exit 0;;
     -*)                    echo "未知参数: $1" >&2; usage; exit 1;;
     *)                     if [ -z "$VERSION" ]; then VERSION="$1"; shift;
@@ -124,12 +130,124 @@ derive_version_from_branch() {
   done
   return 1
 }
+# 兜底:从当前工作区 package.json 读 version 字段(用于 --from main 这类无法从分支名推导的场景)
+read_pkg_version() {
+  [ -f package.json ] || return 1
+  python3 - <<'PY' 2>/dev/null
+import json
+try:
+    with open("package.json", encoding="utf-8") as f:
+        v = json.load(f).get("version", "")
+    print(v) if v else exit(1)
+except Exception:
+    exit(1)
+PY
+}
+
+# ---- --doctor:只读环境体检,不切分支/不改文件/不提交/不推送 ----
+run_doctor() {
+  local ok=0 warn=0 fail=0
+  local mark
+  pass() { echo "  [ok]   $1"; }
+  wrn()  { echo "  [warn] $1"; warn=$((warn+1)); }
+  err()  { echo "  [FAIL] $1" >&2; fail=$((fail+1)); }
+
+  echo "==== release_local.sh doctor ===="
+
+  # 1. git 仓库 & 仓库根
+  if git rev-parse --show-toplevel >/dev/null 2>&1; then
+    pass "git 仓库: $REPO_ROOT"
+  else
+    err "当前不在 git 仓库内"
+  fi
+
+  # 2. prepare_release.py 存在
+  if [ -f "$PREPARE" ]; then
+    pass "prepare_release.py 存在: $PREPARE"
+  else
+    err "找不到 $PREPARE(从不含 .codebase 的分支运行?请在含 .codebase 的分支执行)"
+  fi
+
+  # 3. 工作区是否干净(有未提交改动会挡住脚本内部 checkout)
+  if [ -z "$(git status --porcelain 2>/dev/null)" ]; then
+    pass "工作区干净"
+  else
+    wrn "工作区有未提交改动,脚本内部 git checkout 可能被阻挡(请先 commit/stash)"
+  fi
+
+  # 4. package.json 可解析 & version 合法
+  if [ -f package.json ]; then
+    local pv
+    if pv="$(read_pkg_version)"; then
+      if [[ "$pv" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        pass "package.json version 合法: $pv"
+      else
+        wrn "package.json version 非 a.b.c 格式: $pv"
+      fi
+    else
+      err "package.json 无法解析或缺少 version 字段"
+    fi
+  else
+    wrn "当前分支无 package.json"
+  fi
+
+  # 5. GitHub 认证方式
+  local effective_token="${TOKEN_ARG:-${GITHUB_TOKEN:-}}"
+  if [ "$USE_SSH" = false ] && [ -n "$effective_token" ]; then
+    pass "GitHub 认证: 检测到 token,将走 HTTPS"
+  else
+    pass "GitHub 认证: 未检测到 token,将走 SSH(默认)"
+  fi
+
+  # 6. SSH 连通性(仅在会走 SSH 时检查)
+  if [ "$USE_SSH" = true ] || [ -z "$effective_token" ]; then
+    if command -v ssh >/dev/null 2>&1; then
+      # GitHub 对成功认证返回 exit 1 + "successfully authenticated" 文案,不会给 shell
+      local ssh_out
+      ssh_out="$(ssh -T -o BatchMode=yes -o StrictHostKeyChecking=accept-new git@github.com 2>&1 || true)"
+      if echo "$ssh_out" | grep -qi "successfully authenticated"; then
+        pass "SSH 连通 github.com,key 认证通过"
+      else
+        wrn "SSH 未认证通过(推送可能失败):$(echo "$ssh_out" | head -1)"
+      fi
+    else
+      wrn "未找到 ssh 命令,无法校验 SSH 连通性"
+    fi
+  fi
+
+  # 7. --from / --to 分支可达(remote 存在性)
+  local b
+  if [ -n "$FROM_BRANCH" ]; then
+    if git ls-remote --exit-code --heads origin "$FROM_BRANCH" >/dev/null 2>&1; then
+      pass "--from 分支可达: origin/$FROM_BRANCH"
+    else
+      wrn "--from 分支在 origin 上不存在或不可达: $FROM_BRANCH"
+    fi
+  fi
+  for b in ${TO_BRANCH}; do
+    if git ls-remote --exit-code --heads origin "$b" >/dev/null 2>&1; then
+      pass "--to 分支可达(origin): $b"
+    else
+      wrn "--to 分支在 origin 上暂不存在(push 时会新建): $b"
+    fi
+  done
+
+  echo "==== doctor 结束: ${warn} warn, ${fail} fail ===="
+  [ "$fail" -eq 0 ] && return 0 || return 1
+}
+if [ "$DOCTOR" = true ]; then
+  run_doctor
+  exit $?
+fi
+
 if [ -z "$VERSION" ]; then
   if VERSION="$(derive_version_from_branch)"; then
     echo "[version] 未显式传 version,从分支名推导得到: $VERSION"
+  elif VERSION="$(read_pkg_version)"; then
+    echo "[version] 未显式传 version,也无法从分支名推导,兜底读 package.json version: $VERSION"
   else
-    echo "ERROR: 未提供 version,且无法从 --from/--to 的 release/vX.Y.Z 分支名推导。" >&2
-    echo "       请显式传入版本号,或把 --from/--to 指向 release/vX.Y.Z 形式的分支。" >&2
+    echo "ERROR: 未提供 version,既无法从 --from/--to 的 release/vX.Y.Z 分支名推导," >&2
+    echo "       也无法从 package.json 读取 version。请显式传入版本号。" >&2
     usage; exit 1
   fi
 fi
