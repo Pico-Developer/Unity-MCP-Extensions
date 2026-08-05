@@ -7,7 +7,7 @@ PICO XR feature construction APIs for Unity MCP agents. Idempotent, non-destruct
 This Unity package exposes PICO XR building blocks as MCP (Model Context Protocol) tools, enabling AI agents (e.g. Unity AI Assistant) to programmatically configure XR scenes for PICO devices. It is designed to be used together with the **PICO Unity Integration SDK 6.0.x** and aligns its dependency baseline with that SDK (XR Interaction Toolkit **3.x**).
 
 **Package name:** `com.bytedance.pico.mcp-extensions`  
-**Version:** 0.0.3  
+**Version:** 0.0.4  
 **Unity:** 6000.0+  
 **Author:** ByteDance PICO
 
@@ -78,7 +78,20 @@ Add this package to your Unity project via the Package Manager:
 
 ## Manual Testing (MenuItems)
 
-All building blocks are accessible via the Unity menu:
+> **Note:** The **PICO MCP** menu bar is hidden by default. It is guarded by the
+> `PICO_MCP_SHOW_MENU` scripting define symbol (default: **off / false**). The MCP
+> tool surface (`[McpTool]` methods) and all underlying C# APIs work regardless of
+> this symbol — it only controls whether the manual-testing menu items appear.
+>
+> To **show** the menu (set to true), add `PICO_MCP_SHOW_MENU` to your project's
+> scripting define symbols:
+>
+> - **Editor:** *Edit > Project Settings > Player > Other Settings > Scripting Define Symbols*, add `PICO_MCP_SHOW_MENU`, then Apply.
+> - **Or** edit `Packages/manifest.json` / your `.asmdef` `defineConstraints`, or add it to `csc.rsp` (`-define:PICO_MCP_SHOW_MENU`).
+>
+> To **hide** the menu again (default), remove the symbol.
+
+When `PICO_MCP_SHOW_MENU` is defined, all building blocks are accessible via the Unity menu:
 
 - **PICO MCP > VST > Ensure / Remove**
 - **PICO MCP > Controller > Ensure / Remove**
