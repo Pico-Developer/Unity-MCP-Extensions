@@ -391,9 +391,13 @@ namespace ByteDance.PICO.MCPExtensions.Tools
                     hand         = ProbeHandStatus(),
                     camera       = ProbeCameraStatus(),
                 };
-                return PXR_MCP_Result.Ok("PICO XR status snapshot collected.", details);
+                var result = PXR_MCP_Result.Ok("PICO XR status snapshot collected.", details);
+                return result;
             }
-            catch (Exception e) { return PXR_MCP_Result.FromException("pico_xr_status", e); }
+            catch (Exception e)
+            {
+                return PXR_MCP_Result.FromException("pico_xr_status", e);
+            }
         }
 
         // =============================================================
