@@ -67,8 +67,26 @@ restore_branch() {
     if [ "$cur" != "$ORIG_REF" ]; then
       echo ""
       echo "[cleanup] 切回起始分支/位置: $ORIG_REF"
-      git checkout -q "$ORIG_REF" 2>/dev/null \
-        || echo "[cleanup] 警告: 无法切回 $ORIG_REF(工作区可能有未提交改动),请手动处理" >&2
+      # push 前的剥离用 `git rm -r --cached .codebase .scripts`,只把它们从索引移除,
+      # 磁盘上会残留成"未跟踪文件"。直接 checkout 回仍跟踪这些目录的起始分支时,git 会
+      # 报"未跟踪工作区文件会被覆盖"而中止,既切不回去、临时 prep 分支也删不掉。
+      # 这些未跟踪内容与起始分支里跟踪的同名文件一致(仅索引被删,磁盘未改动),
+      # 因此可安全地在切回前用 git clean 清掉,再由 checkout 从起始分支重新恢复。
+      if ! git checkout -q "$ORIG_REF" 2>/dev/null; then
+        git clean -qfd -- .codebase .scripts 2>/dev/null || true
+        git checkout -q "$ORIG_REF" 2>/dev/null \
+          || git checkout -q -f "$ORIG_REF" 2>/dev/null \
+          || echo "[cleanup] 警告: 无法切回 $ORIG_REF,请手动执行 git checkout $ORIG_REF" >&2
+      fi
+    fi
+    # 只有确实回到了起始分支,才删除临时的 release/prep-* 分支(原脚本漏删,残留一堆 prep 分支)
+    cur="$(git symbolic-ref -q --short HEAD || git rev-parse HEAD)"
+    if [ "$cur" = "$ORIG_REF" ] && [ -n "${PREP_BRANCH:-}" ]; then
+      if git rev-parse --verify -q "$PREP_BRANCH" >/dev/null 2>&1; then
+        git branch -D "$PREP_BRANCH" >/dev/null 2>&1 \
+          && echo "[cleanup] 已删除临时分支 $PREP_BRANCH" \
+          || echo "[cleanup] 警告: 无法删除临时分支 $PREP_BRANCH,请手动 git branch -D $PREP_BRANCH" >&2
+      fi
     fi
   fi
   exit $code
