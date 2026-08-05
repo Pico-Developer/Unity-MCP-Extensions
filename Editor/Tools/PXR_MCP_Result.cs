@@ -25,6 +25,8 @@ namespace ByteDance.PICO.MCPExtensions.Tools
         public const string StatusSkipped        = "skipped";
         public const string StatusError          = "error";
 
+        public bool success;      // Unity MCP standard response field
+        public string message;    // Unity MCP standard response field
         public string status;     // one of the Status* constants
         public string summary;    // human-readable one-liner for the LLM to echo
         public string warning;    // populated when status == skipped
@@ -35,20 +37,22 @@ namespace ByteDance.PICO.MCPExtensions.Tools
         // Factory helpers
         // -------------------------------------------------------------
         public static PXR_MCP_Result Ok(string summary, object data = null)
-            => new PXR_MCP_Result { status = StatusOk, summary = summary, data = data };
+            => new PXR_MCP_Result { success = true, message = summary, status = StatusOk, summary = summary, data = data };
 
         public static PXR_MCP_Result AlreadyPresent(string summary, object data = null)
-            => new PXR_MCP_Result { status = StatusAlreadyPresent, summary = summary, data = data };
+            => new PXR_MCP_Result { success = true, message = summary, status = StatusAlreadyPresent, summary = summary, data = data };
 
         public static PXR_MCP_Result Skipped(string summary, string warning, object data = null)
-            => new PXR_MCP_Result { status = StatusSkipped, summary = summary, warning = warning, data = data };
+            => new PXR_MCP_Result { success = true, message = summary, status = StatusSkipped, summary = summary, warning = warning, data = data };
 
         public static PXR_MCP_Result Error(string summary, string error, object data = null)
-            => new PXR_MCP_Result { status = StatusError, summary = summary, error = error, data = data };
+            => new PXR_MCP_Result { success = false, message = summary, status = StatusError, summary = summary, error = error, data = data };
 
         public static PXR_MCP_Result FromException(string toolName, Exception ex)
             => new PXR_MCP_Result
             {
+                success = false,
+                message = "[" + toolName + "] threw " + ex.GetType().Name,
                 status  = StatusError,
                 summary = "[" + toolName + "] threw " + ex.GetType().Name,
                 error   = ex.Message,

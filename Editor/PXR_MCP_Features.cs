@@ -28,7 +28,9 @@ namespace ByteDance.PICO.MCPExtensions.Editor
     // an Editor without the MCP bridge (mirrors every other block's pattern).
     public static class PXR_MCP_Camera
     {
+#if PICO_MCP_SHOW_MENU
         [MenuItem("PICO MCP/Camera/Enforce Single Active Camera")]
+#endif
         public static void Menu_Enforce()
         {
             var origin = PXR_MCP_Common.EnsureXROrigin();
@@ -37,7 +39,9 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             Debug.Log($"[PICO MCP] Enforce single active camera: {n} foreign camera(s) disabled.");
         }
 
+#if PICO_MCP_SHOW_MENU
         [MenuItem("PICO MCP/Camera/Restore Foreign Cameras")]
+#endif
         public static void Menu_Restore()
         {
             var n = PXR_MCP_Common.RestoreForeignCameras();
@@ -50,7 +54,9 @@ namespace ByteDance.PICO.MCPExtensions.Editor
     {
         public const string MarkerChild = "[PICO_MCP] VST Marker";
 
+#if PICO_MCP_SHOW_MENU
         [MenuItem("PICO MCP/VST/Ensure")]
+#endif
         public static bool Ensure()
         {
             var origin = PXR_MCP_Common.EnsureXROrigin();
@@ -77,7 +83,9 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             return true;
         }
 
+#if PICO_MCP_SHOW_MENU
         [MenuItem("PICO MCP/VST/Remove")]
+#endif
         public static void Remove()
         {
             var origin = PXR_MCP_Common.FindAgentOrigin();
@@ -96,7 +104,9 @@ namespace ByteDance.PICO.MCPExtensions.Editor
         public const string MarkerLeft  = "[PICO_MCP] Left Controller Model";
         public const string MarkerRight = "[PICO_MCP] Right Controller Model";
 
+#if PICO_MCP_SHOW_MENU
         [MenuItem("PICO MCP/Controller/Ensure")]
+#endif
         public static bool Ensure()
         {
             var origin = PXR_MCP_Common.EnsureXROrigin();
@@ -118,7 +128,9 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             return true;
         }
 
+#if PICO_MCP_SHOW_MENU
         [MenuItem("PICO MCP/Controller/Remove")]
+#endif
         public static void Remove()
         {
             var origin = PXR_MCP_Common.FindAgentOrigin();
@@ -179,7 +191,9 @@ namespace ByteDance.PICO.MCPExtensions.Editor
         // "Locomotion" GameObject by SetActive. We additionally toggle the root-level
         // CharacterController + CharacterControllerDriver components that were disabled
         // by the initial-hide policy. Idempotent.
+#if PICO_MCP_SHOW_MENU
         [MenuItem("PICO MCP/Locomotion/Enable")]
+#endif
         public static bool Enable()
         {
             var origin = PXR_MCP_Common.EnsureXROrigin();
@@ -189,7 +203,9 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             return true;
         }
 
+#if PICO_MCP_SHOW_MENU
         [MenuItem("PICO MCP/Locomotion/Disable")]
+#endif
         public static bool Disable()
         {
             var origin = PXR_MCP_Common.EnsureXROrigin();
@@ -201,11 +217,17 @@ namespace ByteDance.PICO.MCPExtensions.Editor
 
         // Fine-grained presets that toggle children under the Locomotion subtree.
         // These imply enabling the module so the children actually take effect.
+#if PICO_MCP_SHOW_MENU
         [MenuItem("PICO MCP/Locomotion/Configure.../Default (Move+Turn+Teleport)")]
+#endif
         public static void Menu_Default() => Configure(LocomotionFlags.Default);
+#if PICO_MCP_SHOW_MENU
         [MenuItem("PICO MCP/Locomotion/Configure.../All")]
+#endif
         public static void Menu_All() => Configure(LocomotionFlags.All);
+#if PICO_MCP_SHOW_MENU
         [MenuItem("PICO MCP/Locomotion/Configure.../Disable All Children")]
+#endif
         public static void Menu_None() => Configure(LocomotionFlags.None);
 
         public static bool Configure(LocomotionFlags enabled)
@@ -273,7 +295,9 @@ namespace ByteDance.PICO.MCPExtensions.Editor
 
         public enum EnsureOutcome { Configured, ImportingRecompile, Error }
 
+#if PICO_MCP_SHOW_MENU
         [MenuItem("PICO MCP/Spatial Mesh/Ensure")]
+#endif
         public static void Menu_Ensure() { Ensure(out _); }
 
         // Two-phase enable:
@@ -351,7 +375,9 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             return EnsureOutcome.Configured;
         }
 
+#if PICO_MCP_SHOW_MENU
         [MenuItem("PICO MCP/Spatial Mesh/Remove")]
+#endif
         public static void Remove()
         {
             var origin = PXR_MCP_Common.FindAgentOrigin();
@@ -511,7 +537,9 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             return null;
         }
 
+#if PICO_MCP_SHOW_MENU
         [MenuItem("PICO MCP/Hand/Ensure")]
+#endif
         public static bool Ensure()
         {
             var origin = PXR_MCP_Common.EnsureXROrigin();
@@ -552,7 +580,9 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             return true;
         }
 
+#if PICO_MCP_SHOW_MENU
         [MenuItem("PICO MCP/Hand/Remove")]
+#endif
         public static void Remove()
         {
             var origin = PXR_MCP_Common.FindAgentOrigin();

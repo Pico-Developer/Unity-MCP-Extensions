@@ -294,7 +294,9 @@ namespace ByteDance.PICO.MCPExtensions.Editor
         const string XRI = "com.unity.xr.interaction.toolkit";
         const string XR_HANDS = "com.unity.xr.hands";
 
+#if PICO_MCP_SHOW_MENU
         [MenuItem("PICO MCP/Packages/Show Installed (Console)")]
+#endif
         static void Menu_ShowInstalled()
         {
             var list = ListInstalled();
@@ -302,13 +304,19 @@ namespace ByteDance.PICO.MCPExtensions.Editor
                       string.Join("\n", list.Select(p => "  " + p.name + "@" + p.version + "  [" + p.source + "]")));
         }
 
+#if PICO_MCP_SHOW_MENU
         [MenuItem("PICO MCP/Packages/XRI/Install (latest)")]
+#endif
         static void Menu_AddXRI() => LogResult(Add(XRI));
 
+#if PICO_MCP_SHOW_MENU
         [MenuItem("PICO MCP/Packages/XRI/Remove")]
+#endif
         static void Menu_RemoveXRI() => LogResult(Remove(XRI));
 
+#if PICO_MCP_SHOW_MENU
         [MenuItem("PICO MCP/Packages/XRI/List Samples (Console)")]
+#endif
         static void Menu_ListXRISamples()
         {
             var samples = ListSamples(XRI);
@@ -316,13 +324,19 @@ namespace ByteDance.PICO.MCPExtensions.Editor
                       string.Join("\n", samples.Select(s => (s.imported ? "[x] " : "[ ] ") + s.displayName)));
         }
 
+#if PICO_MCP_SHOW_MENU
         [MenuItem("PICO MCP/Packages/XRI/Import Sample 'Starter Assets'")]
+#endif
         static void Menu_ImportXRIStarter() => LogResult(ImportSample(XRI, "Starter Assets"));
 
+#if PICO_MCP_SHOW_MENU
         [MenuItem("PICO MCP/Packages/XR Hands/Install (latest)")]
+#endif
         static void Menu_AddXRHands() => LogResult(Add(XR_HANDS));
 
+#if PICO_MCP_SHOW_MENU
         [MenuItem("PICO MCP/Packages/XR Hands/Remove")]
+#endif
         static void Menu_RemoveXRHands() => LogResult(Remove(XR_HANDS));
 
         // -----------------------------------------------------------------
