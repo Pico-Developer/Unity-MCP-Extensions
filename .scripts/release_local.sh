@@ -56,31 +56,61 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
 cd "$REPO_ROOT"
 
 # ---- 记录起始分支/位置,结束时(无论成败)自动切回 ----
-ORIG_REF="$(git symbolic-ref -q --short HEAD || git rev-parse HEAD)"
+# 坑:不要用 `git symbolic-ref --short HEAD` 的输出作为切回参数——当存在同名 tag 等
+# 引用歧义时,它会返回带前缀的 `heads/release/v0.0.4`;而 `git checkout heads/release/v0.0.4`
+# 会被 git 当成 commit-ish 解析,切回时进入"分离头指针"(detached HEAD),
+# 日志里也会打印难看的 `heads/` 前缀。这里改为:取完整 ref(refs/heads/xxx)剥掉前缀得到
+# 干净分支名,切回统一用 `git switch`(只认分支、绝不分离);起始若本就是分离态则记 SHA。
+ORIG_FULLREF="$(git symbolic-ref -q HEAD || true)"
+if [ -n "$ORIG_FULLREF" ]; then
+  ORIG_REF="${ORIG_FULLREF#refs/heads/}"   # 干净分支名,如 release/v0.0.4
+  ORIG_IS_BRANCH=true
+else
+  ORIG_REF="$(git rev-parse HEAD)"          # 起始就是分离头指针,记 SHA
+  ORIG_IS_BRANCH=false
+fi
+
+# 取"当前"引用的干净名称(分支名或 SHA),用于和 ORIG_REF 比较,避免 heads/ 前缀歧义
+current_ref() {
+  local f
+  f="$(git symbolic-ref -q HEAD || true)"
+  if [ -n "$f" ]; then echo "${f#refs/heads/}"; else git rev-parse HEAD; fi
+}
+
+# 切回起始位置:分支起点用 git switch(绝不分离),分离态起点用 checkout 到 SHA
+switch_back() {
+  if [ "$ORIG_IS_BRANCH" = true ]; then
+    git switch -q "$ORIG_REF" 2>/dev/null || git checkout -q "$ORIG_REF" 2>/dev/null
+  else
+    git checkout -q "$ORIG_REF" 2>/dev/null
+  fi
+}
+
 restore_branch() {
   local code=$?
   # 清理临时的 prepare_release.py 副本(在切分支前复制出来,避免 checkout 到不含 .codebase 的分支后丢失)
   [ -n "${PREPARE_TMP:-}" ] && rm -f "$PREPARE_TMP" 2>/dev/null || true
   if [ -n "${ORIG_REF:-}" ]; then
     local cur
-    cur="$(git symbolic-ref -q --short HEAD || git rev-parse HEAD)"
+    cur="$(current_ref)"
     if [ "$cur" != "$ORIG_REF" ]; then
       echo ""
       echo "[cleanup] 切回起始分支/位置: $ORIG_REF"
       # push 前的剥离用 `git rm -r --cached .codebase .scripts`,只把它们从索引移除,
-      # 磁盘上会残留成"未跟踪文件"。直接 checkout 回仍跟踪这些目录的起始分支时,git 会
+      # 磁盘上会残留成"未跟踪文件"。直接切回仍跟踪这些目录的起始分支时,git 会
       # 报"未跟踪工作区文件会被覆盖"而中止,既切不回去、临时 prep 分支也删不掉。
       # 这些未跟踪内容与起始分支里跟踪的同名文件一致(仅索引被删,磁盘未改动),
-      # 因此可安全地在切回前用 git clean 清掉,再由 checkout 从起始分支重新恢复。
-      if ! git checkout -q "$ORIG_REF" 2>/dev/null; then
+      # 因此可安全地在切回前用 git clean 清掉,再由切回操作从起始分支重新恢复。
+      if ! switch_back; then
         git clean -qfd -- .codebase .scripts 2>/dev/null || true
-        git checkout -q "$ORIG_REF" 2>/dev/null \
+        switch_back \
+          || git switch -q -f "$ORIG_REF" 2>/dev/null \
           || git checkout -q -f "$ORIG_REF" 2>/dev/null \
-          || echo "[cleanup] 警告: 无法切回 $ORIG_REF,请手动执行 git checkout $ORIG_REF" >&2
+          || echo "[cleanup] 警告: 无法切回 $ORIG_REF,请手动执行 git switch $ORIG_REF" >&2
       fi
     fi
     # 只有确实回到了起始分支,才删除临时的 release/prep-* 分支(原脚本漏删,残留一堆 prep 分支)
-    cur="$(git symbolic-ref -q --short HEAD || git rev-parse HEAD)"
+    cur="$(current_ref)"
     if [ "$cur" = "$ORIG_REF" ] && [ -n "${PREP_BRANCH:-}" ]; then
       if git rev-parse --verify -q "$PREP_BRANCH" >/dev/null 2>&1; then
         git branch -D "$PREP_BRANCH" >/dev/null 2>&1 \
