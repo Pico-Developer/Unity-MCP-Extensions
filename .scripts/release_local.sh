@@ -67,8 +67,26 @@ restore_branch() {
     if [ "$cur" != "$ORIG_REF" ]; then
       echo ""
       echo "[cleanup] 切回起始分支/位置: $ORIG_REF"
-      git checkout -q "$ORIG_REF" 2>/dev/null \
-        || echo "[cleanup] 警告: 无法切回 $ORIG_REF(工作区可能有未提交改动),请手动处理" >&2
+      # push 前的剥离用 `git rm -r --cached .codebase .scripts`,只把它们从索引移除,
+      # 磁盘上会残留成"未跟踪文件"。直接 checkout 回仍跟踪这些目录的起始分支时,git 会
+      # 报"未跟踪工作区文件会被覆盖"而中止,既切不回去、临时 prep 分支也删不掉。
+      # 这些未跟踪内容与起始分支里跟踪的同名文件一致(仅索引被删,磁盘未改动),
+      # 因此可安全地在切回前用 git clean 清掉,再由 checkout 从起始分支重新恢复。
+      if ! git checkout -q "$ORIG_REF" 2>/dev/null; then
+        git clean -qfd -- .codebase .scripts 2>/dev/null || true
+        git checkout -q "$ORIG_REF" 2>/dev/null \
+          || git checkout -q -f "$ORIG_REF" 2>/dev/null \
+          || echo "[cleanup] 警告: 无法切回 $ORIG_REF,请手动执行 git checkout $ORIG_REF" >&2
+      fi
+    fi
+    # 只有确实回到了起始分支,才删除临时的 release/prep-* 分支(原脚本漏删,残留一堆 prep 分支)
+    cur="$(git symbolic-ref -q --short HEAD || git rev-parse HEAD)"
+    if [ "$cur" = "$ORIG_REF" ] && [ -n "${PREP_BRANCH:-}" ]; then
+      if git rev-parse --verify -q "$PREP_BRANCH" >/dev/null 2>&1; then
+        git branch -D "$PREP_BRANCH" >/dev/null 2>&1 \
+          && echo "[cleanup] 已删除临时分支 $PREP_BRANCH" \
+          || echo "[cleanup] 警告: 无法删除临时分支 $PREP_BRANCH,请手动 git branch -D $PREP_BRANCH" >&2
+      fi
     fi
   fi
   exit $code
@@ -240,6 +258,21 @@ fi
 # ---- 需求 0:可选从 from-branch 切临时分支 ----
 if [ "$NO_BRANCH" = false ]; then
   if [ -n "$FROM_BRANCH" ]; then
+    # 先探测 origin 上是否真的存在该分支;不存在直接给出可执行的修复建议,
+    # 避免 `git fetch` 抛出难懂的 "fatal: couldn't find remote ref release/v0.0.4"。
+    # 典型场景:release/vX.Y.Z 已合入 main 且 MR 合并时勾选了"删除源分支",导致远端已无该分支。
+    if ! git ls-remote --exit-code --heads origin "$FROM_BRANCH" >/dev/null 2>&1; then
+      echo "ERROR: 远端 origin 上找不到分支 '$FROM_BRANCH'(couldn't find remote ref)。" >&2
+      echo "       可能原因:该 release 分支已合入主干后被 MR 自动删除,或分支名拼写有误。" >&2
+      echo "       可选处理:" >&2
+      echo "         1) 用一个真实存在的分支作为 --from,例如: --from main" >&2
+      echo "         2) 若确需该 release 分支,先基于主干重建:" >&2
+      echo "              git checkout -b $FROM_BRANCH origin/main && git push origin $FROM_BRANCH" >&2
+      echo "         3) 若本地已 checkout 到目标提交,去掉 --from 直接用当前工作区处理。" >&2
+      echo "       现有远端分支:" >&2
+      git ls-remote --heads origin 2>/dev/null | sed 's#.*refs/heads/#         - #' >&2
+      exit 1
+    fi
     git fetch origin "$FROM_BRANCH"
     git checkout -B "$FROM_BRANCH" "origin/$FROM_BRANCH"
   fi
