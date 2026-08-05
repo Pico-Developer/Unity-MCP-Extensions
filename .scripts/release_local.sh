@@ -28,7 +28,8 @@
 #   --doctor           只做只读环境体检(git/脚本/工作区/版本/认证/分支可达),
 #                      不切分支、不改文件、不提交、不推送;通过 exit 0,否则 exit 1
 #   --skip-version     跳过"新版本必须更大"校验(格式仍校验)
-#   --tag <name>       推送时打的 tag 名,如 release/v0.0.3;不填不打 tag
+#   --tag <name>       推送时打的 tag 名,如 v0.0.4;不填不打 tag。同名 tag 已存在时
+#                      本地用 -f 覆盖(幂等);推送时仅在加 --force 才覆盖远端同名 tag
 #   --from <b>         先从该分支拉取并 checkout(单个),默认用当前工作区(别名 --from-branch)
 #   --to <b...>        push 目标分支,可空格分隔多个,默认 main(别名 --to-branch)
 #   --push             真正推送到 GitHub(默认关闭 = 相当于 skip_push=true)
@@ -403,8 +404,18 @@ for b in ${TO_BRANCH}; do
   git push $PUSH_OPTS github "HEAD:${b}"
 done
 if [ -n "$TAG" ]; then
-  echo "pushing tag ${TAG}"
-  git tag "$TAG"
-  git push github "$TAG"
+  # 幂等打 tag:`git tag <name>` 在同名 tag 已存在时会以 "标签 '<name>' 已存在" 致命报错中止;
+  # 这里用 -f 让本地 tag 指向当前 HEAD(覆盖旧值),重复发布同一版本也不会失败。
+  echo "[tag] 在当前 HEAD 打 tag: ${TAG}(-f 覆盖同名本地 tag)"
+  git tag -f "$TAG" >/dev/null
+  # 推送 tag:远端若已存在同名 tag,普通 push 会因 non-fast-forward 被拒;
+  # 与分支推送保持一致——仅当传了 --force 才用 --force 覆盖远端 tag,否则普通推送。
+  if [ "$FORCE" = true ]; then
+    echo "[tag] --force:强制推送 tag ${TAG} 覆盖远端"
+    git push --force github "refs/tags/${TAG}"
+  else
+    echo "[tag] 推送 tag ${TAG}(远端已存在同名 tag 时,如需覆盖请加 --force)"
+    git push github "refs/tags/${TAG}"
+  fi
 fi
 echo "[done] 已推送到 GitHub。"
