@@ -28,7 +28,8 @@
 #   --doctor           只做只读环境体检(git/脚本/工作区/版本/认证/分支可达),
 #                      不切分支、不改文件、不提交、不推送;通过 exit 0,否则 exit 1
 #   --skip-version     跳过"新版本必须更大"校验(格式仍校验)
-#   --tag <name>       推送时打的 tag 名,如 release/v0.0.3;不填不打 tag
+#   --tag <name>       推送时打的 tag 名,如 v0.0.4;不填不打 tag。同名 tag 已存在时
+#                      本地用 -f 覆盖(幂等);推送时仅在加 --force 才覆盖远端同名 tag
 #   --from <b>         先从该分支拉取并 checkout(单个),默认用当前工作区(别名 --from-branch)
 #   --to <b...>        push 目标分支,可空格分隔多个,默认 main(别名 --to-branch)
 #   --push             真正推送到 GitHub(默认关闭 = 相当于 skip_push=true)
@@ -56,31 +57,61 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
 cd "$REPO_ROOT"
 
 # ---- 记录起始分支/位置,结束时(无论成败)自动切回 ----
-ORIG_REF="$(git symbolic-ref -q --short HEAD || git rev-parse HEAD)"
+# 坑:不要用 `git symbolic-ref --short HEAD` 的输出作为切回参数——当存在同名 tag 等
+# 引用歧义时,它会返回带前缀的 `heads/release/v0.0.4`;而 `git checkout heads/release/v0.0.4`
+# 会被 git 当成 commit-ish 解析,切回时进入"分离头指针"(detached HEAD),
+# 日志里也会打印难看的 `heads/` 前缀。这里改为:取完整 ref(refs/heads/xxx)剥掉前缀得到
+# 干净分支名,切回统一用 `git switch`(只认分支、绝不分离);起始若本就是分离态则记 SHA。
+ORIG_FULLREF="$(git symbolic-ref -q HEAD || true)"
+if [ -n "$ORIG_FULLREF" ]; then
+  ORIG_REF="${ORIG_FULLREF#refs/heads/}"   # 干净分支名,如 release/v0.0.4
+  ORIG_IS_BRANCH=true
+else
+  ORIG_REF="$(git rev-parse HEAD)"          # 起始就是分离头指针,记 SHA
+  ORIG_IS_BRANCH=false
+fi
+
+# 取"当前"引用的干净名称(分支名或 SHA),用于和 ORIG_REF 比较,避免 heads/ 前缀歧义
+current_ref() {
+  local f
+  f="$(git symbolic-ref -q HEAD || true)"
+  if [ -n "$f" ]; then echo "${f#refs/heads/}"; else git rev-parse HEAD; fi
+}
+
+# 切回起始位置:分支起点用 git switch(绝不分离),分离态起点用 checkout 到 SHA
+switch_back() {
+  if [ "$ORIG_IS_BRANCH" = true ]; then
+    git switch -q "$ORIG_REF" 2>/dev/null || git checkout -q "$ORIG_REF" 2>/dev/null
+  else
+    git checkout -q "$ORIG_REF" 2>/dev/null
+  fi
+}
+
 restore_branch() {
   local code=$?
   # 清理临时的 prepare_release.py 副本(在切分支前复制出来,避免 checkout 到不含 .codebase 的分支后丢失)
   [ -n "${PREPARE_TMP:-}" ] && rm -f "$PREPARE_TMP" 2>/dev/null || true
   if [ -n "${ORIG_REF:-}" ]; then
     local cur
-    cur="$(git symbolic-ref -q --short HEAD || git rev-parse HEAD)"
+    cur="$(current_ref)"
     if [ "$cur" != "$ORIG_REF" ]; then
       echo ""
       echo "[cleanup] 切回起始分支/位置: $ORIG_REF"
       # push 前的剥离用 `git rm -r --cached .codebase .scripts`,只把它们从索引移除,
-      # 磁盘上会残留成"未跟踪文件"。直接 checkout 回仍跟踪这些目录的起始分支时,git 会
+      # 磁盘上会残留成"未跟踪文件"。直接切回仍跟踪这些目录的起始分支时,git 会
       # 报"未跟踪工作区文件会被覆盖"而中止,既切不回去、临时 prep 分支也删不掉。
       # 这些未跟踪内容与起始分支里跟踪的同名文件一致(仅索引被删,磁盘未改动),
-      # 因此可安全地在切回前用 git clean 清掉,再由 checkout 从起始分支重新恢复。
-      if ! git checkout -q "$ORIG_REF" 2>/dev/null; then
+      # 因此可安全地在切回前用 git clean 清掉,再由切回操作从起始分支重新恢复。
+      if ! switch_back; then
         git clean -qfd -- .codebase .scripts 2>/dev/null || true
-        git checkout -q "$ORIG_REF" 2>/dev/null \
+        switch_back \
+          || git switch -q -f "$ORIG_REF" 2>/dev/null \
           || git checkout -q -f "$ORIG_REF" 2>/dev/null \
-          || echo "[cleanup] 警告: 无法切回 $ORIG_REF,请手动执行 git checkout $ORIG_REF" >&2
+          || echo "[cleanup] 警告: 无法切回 $ORIG_REF,请手动执行 git switch $ORIG_REF" >&2
       fi
     fi
     # 只有确实回到了起始分支,才删除临时的 release/prep-* 分支(原脚本漏删,残留一堆 prep 分支)
-    cur="$(git symbolic-ref -q --short HEAD || git rev-parse HEAD)"
+    cur="$(current_ref)"
     if [ "$cur" = "$ORIG_REF" ] && [ -n "${PREP_BRANCH:-}" ]; then
       if git rev-parse --verify -q "$PREP_BRANCH" >/dev/null 2>&1; then
         git branch -D "$PREP_BRANCH" >/dev/null 2>&1 \
@@ -373,8 +404,18 @@ for b in ${TO_BRANCH}; do
   git push $PUSH_OPTS github "HEAD:${b}"
 done
 if [ -n "$TAG" ]; then
-  echo "pushing tag ${TAG}"
-  git tag "$TAG"
-  git push github "$TAG"
+  # 幂等打 tag:`git tag <name>` 在同名 tag 已存在时会以 "标签 '<name>' 已存在" 致命报错中止;
+  # 这里用 -f 让本地 tag 指向当前 HEAD(覆盖旧值),重复发布同一版本也不会失败。
+  echo "[tag] 在当前 HEAD 打 tag: ${TAG}(-f 覆盖同名本地 tag)"
+  git tag -f "$TAG" >/dev/null
+  # 推送 tag:远端若已存在同名 tag,普通 push 会因 non-fast-forward 被拒;
+  # 与分支推送保持一致——仅当传了 --force 才用 --force 覆盖远端 tag,否则普通推送。
+  if [ "$FORCE" = true ]; then
+    echo "[tag] --force:强制推送 tag ${TAG} 覆盖远端"
+    git push --force github "refs/tags/${TAG}"
+  else
+    echo "[tag] 推送 tag ${TAG}(远端已存在同名 tag 时,如需覆盖请加 --force)"
+    git push github "refs/tags/${TAG}"
+  fi
 fi
 echo "[done] 已推送到 GitHub。"
