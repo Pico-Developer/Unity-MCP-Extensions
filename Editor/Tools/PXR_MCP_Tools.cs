@@ -232,6 +232,69 @@ namespace ByteDance.PICO.MCPExtensions.Tools
         }
 
         // =============================================================
+        // pico_xr_plane
+        // =============================================================
+        public enum PlaneAction { Enable, Disable, Status }
+
+        public class PlaneParams
+        {
+            [McpDescription("Operation to perform on the PICO Plane Detection block.",
+                Required = true, EnumType = typeof(PlaneAction))]
+            public string Action { get; set; }
+        }
+
+        [McpTool("pico_xr_plane",
+            "Enable, disable, or query PICO Plane Detection on the agent XR Origin. " +
+            "Plane Detection is the SensePack sibling of Spatial Mesh (same start-system / build / update " +
+            "lifecycle; the data source is PlaneDetection instead of SpatialMesh) and likewise depends on VST: " +
+            "enable VST first if it is not on. Like Spatial Mesh, Plane Detection renders through a custom " +
+            "bundled PlaneDetectionManager driver, so enable is TWO-PHASE: the first call copies the " +
+            "PlaneDetectionManager driver + shared shaders/materials/prefab into the project " +
+            "(Assets/PICO_MCP/SpatialMesh), which triggers an Editor recompile. When the response reports an " +
+            "import/recompile in progress, settle-loop on pico_xr_status until the MCP bridge returns, then " +
+            "call enable again to mount and configure the driver.")]
+        public static object PicoXrPlane(PlaneParams p)
+        {
+            try
+            {
+                switch (ParseEnum<PlaneAction>(p?.Action))
+                {
+                    case PlaneAction.Enable:
+                    {
+                        var outcome = PXR_MCP_Plane.Ensure(out var detail);
+                        switch (outcome)
+                        {
+                            case PXR_MCP_Plane.EnsureOutcome.Configured:
+                                return PXR_MCP_Result.Ok(
+                                    "Plane Detection enabled: PlaneDetectionManager mounted and configured.",
+                                    new { detail });
+                            case PXR_MCP_Plane.EnsureOutcome.ImportingRecompile:
+                                // Driver + assets landed; the Editor is (re)compiling. This is NOT an
+                                // error -- the caller must settle-loop on pico_xr_status and re-enable.
+                                return PXR_MCP_Result.Skipped(
+                                    "Plane Detection driver imported; Editor is recompiling. " +
+                                    "Poll pico_xr_status until the bridge returns, then call enable again.",
+                                    detail, new { recompiling = true });
+                            default:
+                                return PXR_MCP_Result.Error("Failed to enable Plane Detection.", detail);
+                        }
+                    }
+                    case PlaneAction.Disable:
+                        PXR_MCP_Plane.Remove();
+                        return PXR_MCP_Result.Ok("Plane Detection container removed.");
+                    case PlaneAction.Status:
+                    {
+                        var info = ProbePlaneStatus();
+                        return PXR_MCP_Result.Ok(
+                            info.installed ? "Plane Detection is enabled." : "Plane Detection is not enabled.", info);
+                    }
+                }
+                return PXR_MCP_Result.Error("Unknown action.", "action must be one of: enable, disable, status");
+            }
+            catch (Exception e) { return PXR_MCP_Result.FromException("pico_xr_plane", e); }
+        }
+
+        // =============================================================
         // pico_xr_hand
         // =============================================================
         public enum HandAction { Enable, Disable, Status }
@@ -377,7 +440,7 @@ namespace ByteDance.PICO.MCPExtensions.Tools
         public class StatusParams { /* no parameters */ }
 
         [McpTool("pico_xr_status",
-            "Return a snapshot of all PICO XR blocks (VST, Controller, Locomotion, Spatial Mesh, Hand) plus the camera invariant on the agent XR Origin.")]
+            "Return a snapshot of all PICO XR blocks (VST, Controller, Locomotion, Spatial Mesh, Plane, Hand) plus the camera invariant on the agent XR Origin.")]
         public static object PicoXrStatus(StatusParams _)
         {
             try
@@ -388,6 +451,7 @@ namespace ByteDance.PICO.MCPExtensions.Tools
                     controller   = ProbeControllerStatus(),
                     locomotion   = ProbeLocomotionStatus(),
                     spatial_mesh = ProbeSpatialMeshStatus(),
+                    plane        = ProbePlaneStatus(),
                     hand         = ProbeHandStatus(),
                     camera       = ProbeCameraStatus(),
                 };
@@ -482,6 +546,36 @@ namespace ByteDance.PICO.MCPExtensions.Tools
             {
                 installed = mounted,
                 reason = mounted ? null : "container present but SpatialMeshManager not mounted; call enable again",
+            };
+        }
+
+        static BlockStatus ProbePlaneStatus()
+        {
+            var origin = PXR_MCP_Common.FindAgentOrigin();
+            if (origin == null) return new BlockStatus { installed = false, reason = "no agent XR Origin in scene" };
+
+            var container = origin.transform.Find(PXR_MCP_Plane.ContainerName);
+            if (container == null)
+                return new BlockStatus { installed = false, reason = "Plane container not present" };
+
+            // "installed" == the PlaneDetectionManager driver is actually mounted on
+            // the container. A bare container without the driver means enable is
+            // mid-flight (driver imported, not yet compiled/mounted) -> report
+            // not-installed with a settle hint.
+            var driverType = PXR_MCP_Common.FindLoadedType(PXR_MCP_Plane.DriverTypeName);
+            if (driverType == null)
+                return new BlockStatus
+                {
+                    installed = false,
+                    reason = "container present but PlaneDetectionManager type not loaded yet " +
+                             "(driver importing / Editor recompiling, or PICO XR SDK not installed)",
+                };
+
+            var mounted = container.GetComponent(driverType) != null;
+            return new BlockStatus
+            {
+                installed = mounted,
+                reason = mounted ? null : "container present but PlaneDetectionManager not mounted; call enable again",
             };
         }
 
