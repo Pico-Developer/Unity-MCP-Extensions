@@ -75,6 +75,10 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             if (cam.gameObject.GetComponent<PXR_CameraEffectBlock>() == null)
                 Undo.AddComponent<PXR_CameraEffectBlock>(cam.gameObject);
 #endif
+            // Turn on the project-level Video See-Through flag so PXR_BuildProcessor
+            // emits enable_vst in the Android manifest (the shared PXR_Manager
+            // component itself is ensured once in EnsureXROrigin).
+            PXR_MCP_Common.SetProjectCapability("videoSeeThrough", true);
             var m = new GameObject(MarkerChild);
             Undo.RegisterCreatedObjectUndo(m, "PICO MCP VST marker");
             m.transform.SetParent(origin.transform, false);
@@ -92,6 +96,8 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             if (origin == null) { Debug.Log("[PICO MCP] No agent XR Origin."); return; }
             var m = origin.transform.Find(MarkerChild);
             if (m != null) Undo.DestroyObjectImmediate(m.gameObject);
+            // Clear only this block's capability flag; never touch the shared PXR_Manager (R2).
+            PXR_MCP_Common.SetProjectCapability("videoSeeThrough", false);
             Debug.Log("[PICO MCP] VST removed.");
         }
     }
@@ -312,6 +318,10 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             detail = null;
             if (!PXR_MCP_VST.Ensure()) { detail = "VST dependency could not be ensured; see Unity Console."; return EnsureOutcome.Error; } // dependency
 
+            // MR sense-data (Spatial Mesh) requires PICO Stereo Rendering = MultiPass
+            // (Multiview mis-composites passthrough + the sense-data mesh on device).
+            PXR_MCP_Common.SetPicoStereoRenderingMultiPass();
+
             // Idempotent copy of the bundled assets into the project.
             if (!ImportBundledAssets(out var importDetail)) { detail = importDetail; return EnsureOutcome.Error; }
 
@@ -370,6 +380,10 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             so.ApplyModifiedPropertiesWithoutUndo();
             EditorUtility.SetDirty(mgr);
 
+            // Turn on the project-level Spatial Mesh flag so PXR_BuildProcessor emits
+            // enable_mesh_anchor + the SPATIAL_DATA permission in the Android manifest.
+            PXR_MCP_Common.SetProjectCapability("spatialMesh", true);
+
             Debug.Log("[PICO MCP] Spatial Mesh: SpatialMeshManager mounted and configured.");
             detail = "SpatialMeshManager mounted and configured.";
             return EnsureOutcome.Configured;
@@ -384,6 +398,8 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             if (origin == null) return;
             var c = origin.transform.Find(ContainerName);
             if (c != null) Undo.DestroyObjectImmediate(c.gameObject);
+            // Clear only this block's capability flag; never touch the shared PXR_Manager (R2).
+            PXR_MCP_Common.SetProjectCapability("spatialMesh", false);
             // Imported assets under ProjectAssetsDir are left in place (non-destructive:
             // they may be shared / re-enabled later).
             Debug.Log("[PICO MCP] Spatial Mesh removed.");
@@ -393,7 +409,66 @@ namespace ByteDance.PICO.MCPExtensions.Editor
         // Asset import + repair helpers
         // -----------------------------------------------------------------
 
-        static bool ImportBundledAssets(out string detail)
+        // Import ONLY the visual assets (shaders + materials + wireframe prefab)
+        // WITHOUT the SpatialMeshManager driver .cs, repair their GUID links, and
+        // return the wireframe mesh prefab (MeshTriangleFadeOutPrefab). This lets
+        // other MR blocks (e.g. Plane Detection) reuse the SAME wireframe material
+        // as Spatial Mesh — the single asset source is this MCP package — without
+        // pulling in the driver script (which would trigger a compile / two-phase
+        // enable). Idempotent (R1); returns null when the bundled assets are
+        // unavailable (`detail` carries the reason).
+        public static GameObject EnsureWireframeVisualAssets(out string detail)
+        {
+            if (!ImportBundledAssets(out detail, includeDriver: false)) return null;
+            RepairAssetLinks();
+            return AssetDatabase.LoadAssetAtPath<GameObject>(ProjectAssetsDir + "/" + MeshPrefabFile);
+        }
+
+        // Shared destination dir for callers that reuse these bundled assets
+        // (e.g. Plane Detection imports its own driver into the same folder).
+        public static string ProjectDir => ProjectAssetsDir;
+
+        // Load the wireframe fade material (Custom/TriangleFadeOutFromCenter) so
+        // sibling MR blocks (Plane) can configure their driver's wireframeMaterial
+        // field with the SAME material Spatial Mesh uses. Call after
+        // EnsureWireframeVisualAssets so the asset is present and its shader link
+        // repaired. Returns null if not yet imported.
+        public static Material LoadWireframeMaterial()
+            => AssetDatabase.LoadAssetAtPath<Material>(ProjectAssetsDir + "/" + WireMatFile);
+
+        // Copy a SINGLE bundled file (by name) from the package's
+        // Editor/SpatialMeshAssets~ folder into ProjectAssetsDir. Used by the
+        // Plane block to import its custom PlaneDetectionManager.cs driver from
+        // the shared bundled folder (which also holds the Spatial Mesh driver +
+        // visual assets). Idempotent (R1): skips if already present. Triggers a
+        // synchronous asset refresh only when a new file is actually copied
+        // (a .cs copy will start a recompile -> two-phase enable for the caller).
+        public static bool ImportBundledFile(string fileName, out string detail)
+        {
+            detail = null;
+            var src = LocateBundledAssetsDir();
+            if (string.IsNullOrEmpty(src))
+            {
+                detail = "Bundled assets not found in the MCP package (" + BundledFolder + ").";
+                return false;
+            }
+
+            var projectRoot = Directory.GetParent(Application.dataPath).FullName.Replace("\\", "/");
+            var absDest = projectRoot + "/" + ProjectAssetsDir;
+            Directory.CreateDirectory(absDest);
+
+            var s = (src + "/" + fileName).Replace("\\", "/");
+            var d = (absDest + "/" + fileName).Replace("\\", "/");
+            if (!File.Exists(s)) { detail = "Missing bundled asset: " + fileName; return false; }
+            if (!File.Exists(d))
+            {
+                File.Copy(s, d);
+                AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+            }
+            return true;
+        }
+
+        static bool ImportBundledAssets(out string detail, bool includeDriver = true)
         {
             detail = null;
             var src = LocateBundledAssetsDir();
@@ -407,8 +482,12 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             var absDest = projectRoot + "/" + ProjectAssetsDir;
             Directory.CreateDirectory(absDest);
 
+            // Visual-only callers (e.g. Plane Detection reusing the wireframe) skip
+            // the driver .cs so no C# recompile / domain reload is triggered.
+            var files = includeDriver ? BundledFiles : BundledFiles.Where(f => f != DriverScriptFile).ToArray();
+
             bool copiedAny = false;
-            foreach (var f in BundledFiles)
+            foreach (var f in files)
             {
                 var s = (src + "/" + f).Replace("\\", "/");
                 var d = (absDest + "/" + f).Replace("\\", "/");
@@ -480,6 +559,165 @@ namespace ByteDance.PICO.MCPExtensions.Editor
                 }
             }
             AssetDatabase.SaveAssets();
+        }
+
+        static void SetInt(SerializedObject so, string prop, int v)
+        {
+            var p = so.FindProperty(prop);
+            if (p != null) p.intValue = v;
+        }
+
+        static void SetObj(SerializedObject so, string prop, UnityEngine.Object v)
+        {
+            var p = so.FindProperty(prop);
+            if (p != null) p.objectReferenceValue = v;
+        }
+    }
+
+    // ---------------- Plane Detection (depends on VST) ----------------
+    // Plane Detection is the SensePack sibling of Spatial Mesh: it starts the
+    // PlaneDetection sense-data provider and renders the detected planes at
+    // runtime. The only difference from Spatial Mesh is the DATA SOURCE
+    // (PXR_Manager.PlaneDetectionDataUpdated vs SpatialMeshDataUpdated).
+    //
+    // To make the plane visual TRULY match Spatial Mesh, Plane Detection uses a
+    // CUSTOM driver `PlaneDetectionManager` (global namespace) that reuses
+    // SpatialMeshManager's pool + fade-shader (_TargetPosition / _StartTime)
+    // render pipeline VERBATIM — unlike the SDK's PXR_PlaneDetectionManager,
+    // which feeds neither shader global and overwrites the material color per
+    // semantic label (clobbering the wireframe fade material). That custom
+    // driver is bundled alongside SpatialMeshManager under
+    // Editor/SpatialMeshAssets~ (Unity-ignored via the trailing '~').
+    //
+    // Because the driver .cs must be copied into the project and compiled before
+    // it can be reflection-mounted, Plane Detection is a TWO-PHASE enable, EXACTLY
+    // like Spatial Mesh:
+    //   Phase 1 - copy the PlaneDetectionManager.cs driver + shared visual assets
+    //             into the project, refresh, and report ImportingRecompile. The
+    //             caller must settle-loop (poll pico_xr_status) then enable again.
+    //   Phase 2 - once PlaneDetectionManager is compiled into the domain, ensure
+    //             the container, mount the driver and configure its serialized
+    //             fields with the SAME wireframe prefab + material Spatial Mesh
+    //             uses.
+    public static class PXR_MCP_Plane
+    {
+        public const string ContainerName = "[PICO_MCP] Plane";
+
+        // Custom global-namespace driver bundled in this MCP package, resolved by
+        // reflection after import + recompile (mirrors SpatialMeshManager).
+        public const string DriverTypeName = "PlaneDetectionManager";
+
+        // Bundled driver .cs (lives in the SAME folder as the Spatial Mesh assets).
+        const string DriverScriptFile = "PlaneDetectionManager.cs";
+
+        // Shared wireframe mesh prefab imported by the Spatial Mesh block.
+        const string MeshPrefabFile = "MeshTriangleFadeOutPrefab.prefab";
+
+        public enum EnsureOutcome { Configured, ImportingRecompile, Error }
+
+#if PICO_MCP_SHOW_MENU
+        [MenuItem("PICO MCP/Plane/Ensure")]
+#endif
+        public static void Menu_Ensure() { Ensure(out _); }
+
+        // Two-phase enable (mirrors PXR_MCP_SpatialMesh):
+        //   Phase 1 - import the custom PlaneDetectionManager.cs driver + the shared
+        //             wireframe visual assets, refresh, report ImportingRecompile.
+        //   Phase 2 - once PlaneDetectionManager is loaded, ensure the container,
+        //             mount the driver and configure its serialized fields.
+        public static EnsureOutcome Ensure(out string detail)
+        {
+            detail = null;
+            if (!PXR_MCP_VST.Ensure()) { detail = "VST dependency could not be ensured; see Unity Console."; return EnsureOutcome.Error; } // dependency
+
+            // MR sense-data (Plane Detection) requires PICO Stereo Rendering = MultiPass
+            // (Multiview mis-composites passthrough + the sense-data mesh on device).
+            PXR_MCP_Common.SetPicoStereoRenderingMultiPass();
+
+            // Import the shared wireframe visual assets (shaders + materials + mesh
+            // prefab, no driver) and repair their GUID links, so the plane driver can
+            // reuse the SAME material as Spatial Mesh.
+            var meshPrefab = PXR_MCP_SpatialMesh.EnsureWireframeVisualAssets(out var visualDetail);
+            if (meshPrefab == null) { detail = visualDetail; return EnsureOutcome.Error; }
+
+            // Import the custom PlaneDetectionManager.cs driver from the same bundled
+            // folder (this copies the .cs and triggers a recompile on first import).
+            if (!PXR_MCP_SpatialMesh.ImportBundledFile(DriverScriptFile, out var importDetail)) { detail = importDetail; return EnsureOutcome.Error; }
+
+            var driverType = PXR_MCP_Common.FindLoadedType(DriverTypeName);
+            if (driverType == null)
+            {
+                // Driver just landed (or the PICO SDK scripting define is not yet
+                // applied, in which case the guarded driver compiles to nothing).
+                // Either way the Editor is (re)compiling and the type is not in this
+                // domain yet.
+                detail = "PlaneDetectionManager driver imported to " + PXR_MCP_SpatialMesh.ProjectDir +
+                         ". The Editor is (re)compiling; poll pico_xr_status until the MCP bridge returns, " +
+                         "then call pico_xr_plane(action=enable) again to mount and configure the driver. " +
+                         "If the type never appears, verify the PICO XR SDK is installed (the driver is guarded by ENABLE_PICO_XR_SDK).";
+                return EnsureOutcome.ImportingRecompile;
+            }
+
+            var origin = PXR_MCP_Common.FindAgentOrigin();
+            if (origin == null) { detail = "no agent XR Origin in scene"; return EnsureOutcome.Error; }
+
+            var container = origin.transform.Find(ContainerName);
+            if (container == null)
+            {
+                var go = new GameObject(ContainerName);
+                Undo.RegisterCreatedObjectUndo(go, "Create Plane container");
+                go.transform.SetParent(origin.transform, false);
+                container = go.transform;
+            }
+
+            // Idempotent: driver already mounted -> nothing more to do (R1).
+            if (container.GetComponent(driverType) != null)
+            {
+                detail = "PlaneDetectionManager already mounted and configured.";
+                return EnsureOutcome.Configured;
+            }
+
+            var wireMat = PXR_MCP_SpatialMesh.LoadWireframeMaterial();
+
+            var mgr = Undo.AddComponent(container.gameObject, driverType);
+            if (mgr == null) { detail = "failed to add PlaneDetectionManager component"; return EnsureOutcome.Error; }
+
+            // Configure serialized fields, matching Spatial Mesh's Inspector config.
+            // The plane driver bakes vertices to world space and parents its pooled
+            // instances under meshContainer, so the container itself must sit at the
+            // origin (it does: it is a fresh child of the XR Origin).
+            var so = new SerializedObject(mgr);
+            SetInt(so, "maxRenderPerFrame", 200);
+            SetInt(so, "meshAmount", 300);
+            SetObj(so, "meshContainer", container);   // Transform
+            SetObj(so, "meshPrefab", meshPrefab);
+            SetObj(so, "wireframeMaterial", wireMat);
+            so.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(mgr);
+
+            // Turn on the project-level Plane Detection flag so PXR_BuildProcessor
+            // emits enable_plane_detection + the SPATIAL_DATA permission in the manifest.
+            PXR_MCP_Common.SetProjectCapability("planeDetection", true);
+
+            Debug.Log("[PICO MCP] Plane: PlaneDetectionManager mounted and configured.");
+            detail = "PlaneDetectionManager mounted and configured.";
+            return EnsureOutcome.Configured;
+        }
+
+#if PICO_MCP_SHOW_MENU
+        [MenuItem("PICO MCP/Plane/Remove")]
+#endif
+        public static void Remove()
+        {
+            var origin = PXR_MCP_Common.FindAgentOrigin();
+            if (origin == null) return;
+            var c = origin.transform.Find(ContainerName);
+            if (c != null) Undo.DestroyObjectImmediate(c.gameObject);
+            // Clear only this block's capability flag; never touch the shared PXR_Manager (R2).
+            PXR_MCP_Common.SetProjectCapability("planeDetection", false);
+            // Imported assets are left in place (non-destructive: shared with Spatial
+            // Mesh / may be re-enabled later).
+            Debug.Log("[PICO MCP] Plane removed.");
         }
 
         static void SetInt(SerializedObject so, string prop, int v)
