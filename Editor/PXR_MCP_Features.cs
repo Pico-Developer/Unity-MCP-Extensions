@@ -769,6 +769,17 @@ namespace ByteDance.PICO.MCPExtensions.Editor
         const string XriPackageName            = "com.unity.xr.interaction.toolkit";
         const string HandsInteractionDemoSample = "Hands Interaction Demo";
 
+        // Hand-interactor group child name inside the XRI "XR Origin Hands (XR Rig)"
+        // template (under its Camera Offset). Kept as constants so the extraction
+        // pipeline does not silently drift if the XRI sample ever renames them.
+        const string SampleHandGroupLeft  = "Left Hand";
+        const string SampleHandGroupRight = "Right Hand";
+        // Sibling Transform (child of the hand group) that carries a TrackedPoseDriver
+        // bound to the OpenXR "aim" pose. Everything ray-related on the NearFar
+        // interactor must originate from here so the ray follows the hand instead
+        // of the Camera Offset root.
+        const string AimPoseChildName = "Aim Pose";
+
         // Interactor component types, reflection-resolved (R3). 3.x NearFarInteractor
         // first, then the 2.x ray/direct fallbacks — any of these on a sample subtree
         // marks it as a usable interactor rig.
@@ -780,6 +791,25 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             "UnityEngine.XR.Interaction.Toolkit.XRRayInteractor",       // 2.x legacy
             "UnityEngine.XR.Interaction.Toolkit.XRDirectInteractor",    // 2.x legacy
         };
+
+        // Root marker of the XRI "XR Origin Hands (XR Rig)" prefab we source the
+        // hand-interactor subtrees from. Reflection-resolved (R3): we identify the
+        // rig by "prefab root carries an XROrigin component" so we never hardcode
+        // the sample's prefab filename or sub-path.
+        const string TypeName_XROrigin = "Unity.XR.CoreUtils.XROrigin";
+
+        // Ray-origin fix-up (defect ③) reflection targets. After we reparent the
+        // sample's Left/Right Hand interactor subtrees, Unity discards prefab
+        // overrides on inner objects and the NearFar caster/attach references
+        // collapse to null — the ray then falls back to the interactor GameObject
+        // (Camera Offset origin) instead of the hand. We re-point them at each
+        // hand's own "Aim Pose" transform.
+        //   * InteractionAttachController.transformToFollow  — attach point.
+        //   * InteractionCasterBase.castOrigin               — near + far cast.
+        //   * CurveVisualController.lineOriginTransform      — rendered line.
+        const string TypeName_InteractionAttachController = "UnityEngine.XR.Interaction.Toolkit.Attachment.InteractionAttachController";
+        const string TypeName_InteractionCasterBase       = "UnityEngine.XR.Interaction.Toolkit.Interactors.Casters.InteractionCasterBase";
+        const string TypeName_CurveVisualController       = "UnityEngine.XR.Interaction.Toolkit.Interactors.Visuals.CurveVisualController";
 
         // Two-phase enable outcome (mirrors PXR_MCP_Plane.EnsureOutcome).
         public enum EnsureOutcome { Configured, ImportingRecompile, Error }
@@ -946,15 +976,37 @@ namespace ByteDance.PICO.MCPExtensions.Editor
         }
 
         // -----------------------------------------------------------------
-        // Defect ② — XRI Hand Interactor rig
+        // Defect ② + ③ — XRI Hand Interactor rig
         // -----------------------------------------------------------------
         // The PICO hand prefabs are visual/tracking only; without an XRI interactor
         // (Interactor component + select InputActionReference + Attach Transform) a
         // pinch never becomes a select and pico_xr_grab has nothing to grab with.
         // We source the ready-wired interactor rig from the XRI "Hands Interaction
         // Demo" sample — the SAME sample the PICO SDK's own "XRI Hand Interaction"
-        // building block relies on — and clone its left/right interactor subtrees
-        // under Camera Offset as agent-owned markers (R2).
+        // building block relies on. Concretely we instantiate the sample's
+        // "XR Origin Hands (XR Rig)" prefab (identified reflection-first by an
+        // XROrigin component on its root, so we never hardcode its filename),
+        // unpack it, then EXTRACT its `Camera Offset/Left Hand` and
+        // `Camera Offset/Right Hand` interactor subtrees, rename them into our
+        // agent-owned markers and reparent them under OUR Camera Offset.
+        //
+        // A blind PrefabUtility.InstantiatePrefab(<sample sub-prefab>) does NOT
+        // work here for two reasons the previous implementation tripped over:
+        //   (1) `Left Hand` / `Right Hand` are NOT independent prefabs — they only
+        //       exist as GameObjects inside the top-level rig prefab. Scanning for
+        //       "any prefab whose name contains left/right and carries an
+        //       interactor" finds unrelated leaves like HandInteractorAffordances
+        //       or PinchPointStabilized and nothing usable ever gets mounted.
+        //   (2) The interactor GameObjects rely on prefab OVERRIDES to point
+        //       `NearFarInteractor` casters + `CurveVisualController` line origin
+        //       at their sibling "Aim Pose" transform. As soon as you reparent an
+        //       inner object out of the top-level prefab instance, Unity discards
+        //       those overrides and the references collapse to null — the ray
+        //       then falls back to the interactor's own Transform (Camera Offset
+        //       origin) and no longer follows the hand.
+        // We therefore extract from an unpacked instance (so no override is lost)
+        // AND explicitly re-wire the four ray-origin references to the local Aim
+        // Pose after reparent (defect ③).
         //
         // TWO-PHASE, exactly like the Plane / Spatial Mesh drivers: importing the
         // sample copies assets and triggers an Editor recompile, so the first call
@@ -971,13 +1023,11 @@ namespace ByteDance.PICO.MCPExtensions.Editor
                 return EnsureOutcome.Configured;
             }
 
-            // If XRI itself is absent there is no interactor type to add; the hand
-            // models are still mounted, but grab-by-pinch cannot work. Surface this
-            // as an error so the caller tells the user to install XRI.
-
-            // Locate the imported "Hands Interaction Demo" sample; import it (two-phase)
-            // if it is not on disk yet.
-            if (!AnyInteractorPrefabInSample(out var leftPrefab, out var rightPrefab))
+            // Locate the XRI Hands Interaction Demo rig prefab. If not on disk yet,
+            // trigger the sample import (two-phase); mirror the Plane driver's
+            // recompile handshake so the caller can settle-loop then re-enable.
+            var rigPrefab = TryLocateHandsRigPrefab();
+            if (rigPrefab == null)
             {
                 var imp = PXR_MCP_PackageOps.ImportSample(XriPackageName, HandsInteractionDemoSample);
                 if (imp == null || !imp.ok)
@@ -995,10 +1045,11 @@ namespace ByteDance.PICO.MCPExtensions.Editor
                 }
 
                 // Freshly imported: assets are landing and the Editor is recompiling.
-                // Re-scan; if the interactor prefabs are not visible yet, tell the
-                // caller to settle-loop then enable again (mirrors the Plane block).
+                // Re-scan; if the rig prefab still isn't visible, tell the caller to
+                // settle-loop then enable again (mirrors the Plane block).
                 AssetDatabase.Refresh();
-                if (!AnyInteractorPrefabInSample(out leftPrefab, out rightPrefab))
+                rigPrefab = TryLocateHandsRigPrefab();
+                if (rigPrefab == null)
                 {
                     detail = "XRI '" + HandsInteractionDemoSample + "' sample imported; the Editor is " +
                              "(re)importing/compiling. Poll pico_xr_status until the MCP bridge returns, " +
@@ -1007,36 +1058,179 @@ namespace ByteDance.PICO.MCPExtensions.Editor
                 }
             }
 
-            if (leftPrefab == null && rightPrefab == null)
+            // Instantiate + unpack the rig into the active scene as a temporary host
+            // so we can freely reparent inner objects (see comment block above).
+            var scene = camOffset.gameObject.scene;
+            GameObject rigInstance = (GameObject)PrefabUtility.InstantiatePrefab(rigPrefab, scene);
+            if (rigInstance == null)
             {
-                detail = "Imported the XRI sample but could not locate a left/right Hand Interactor prefab in it.";
+                detail = "Could not instantiate the XRI hand rig prefab '" + AssetDatabase.GetAssetPath(rigPrefab) + "'.";
                 return EnsureOutcome.Error;
             }
+            try
+            {
+                rigInstance.name = "__PICO_MCP_XRI_HandsRig_Temp";
+                rigInstance.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
+                // Hide from the user during the (brief) extraction window (R2).
+                rigInstance.hideFlags = HideFlags.DontSaveInEditor;
+                Undo.RegisterCreatedObjectUndo(rigInstance, "PICO MCP mount hand interactor rig");
+                PrefabUtility.UnpackPrefabInstance(rigInstance, PrefabUnpackMode.Completely, InteractionMode.AutomatedAction);
 
-            // Clone the sample interactor subtrees under Camera Offset (R2 agent-owned).
-            if (camOffset.Find(MarkerInteractorLeft) == null && leftPrefab != null)
-                MountInteractor(camOffset, leftPrefab, MarkerInteractorLeft);
-            if (camOffset.Find(MarkerInteractorRight) == null && rightPrefab != null)
-                MountInteractor(camOffset, rightPrefab, MarkerInteractorRight);
+                // Find `Camera Offset/Left Hand` and `.../Right Hand` on the unpacked
+                // rig. Fall back to already-renamed marker names so the routine is
+                // resilient to being retried on a partially-mounted scene.
+                var rigCamOffset = rigInstance.transform.Find(PXR_MCP_Common.CameraOffsetName);
+                if (rigCamOffset == null)
+                {
+                    detail = "XRI hand rig prefab has no '" + PXR_MCP_Common.CameraOffsetName + "' child.";
+                    return EnsureOutcome.Error;
+                }
+
+                Transform srcLeft  = rigCamOffset.Find(SampleHandGroupLeft)
+                                  ?? rigCamOffset.Find(MarkerInteractorLeft);
+                Transform srcRight = rigCamOffset.Find(SampleHandGroupRight)
+                                  ?? rigCamOffset.Find(MarkerInteractorRight);
+                if (srcLeft == null && srcRight == null)
+                {
+                    detail = "XRI hand rig prefab has no '" + SampleHandGroupLeft + "' / '" + SampleHandGroupRight + "' children.";
+                    return EnsureOutcome.Error;
+                }
+
+                if (srcLeft != null && camOffset.Find(MarkerInteractorLeft) == null)
+                    ExtractHandGroup(srcLeft, camOffset, MarkerInteractorLeft);
+                if (srcRight != null && camOffset.Find(MarkerInteractorRight) == null)
+                    ExtractHandGroup(srcRight, camOffset, MarkerInteractorRight);
+            }
+            finally
+            {
+                // Always tear down the temporary rig, even on error, so we never
+                // leave a phantom XR Origin next to the agent's XR Origin.
+                if (rigInstance != null)
+                    Undo.DestroyObjectImmediate(rigInstance);
+            }
+
+            if (camOffset.Find(MarkerInteractorLeft) == null && camOffset.Find(MarkerInteractorRight) == null)
+            {
+                detail = "Extraction from XRI hand rig completed without mounting any interactor.";
+                return EnsureOutcome.Error;
+            }
 
             detail = "Hand models + XRI hand interactors mounted.";
             return EnsureOutcome.Configured;
         }
 
-        // Instantiate a sample interactor prefab under Camera Offset as an agent-owned
-        // marker at the rig origin.
-        static GameObject MountInteractor(Transform camOffset, GameObject asset, string markerName)
+        // Rename + reparent a `Left Hand` / `Right Hand` interactor group onto our
+        // Camera Offset, then repair its NearFar ray-origin references so the far
+        // ray actually originates from the hand's Aim Pose (defect ③).
+        static void ExtractHandGroup(Transform sourceGroup, Transform targetCamOffset, string markerName)
         {
-            var existing = camOffset.Find(markerName);
-            if (existing != null) return existing.gameObject;
-            var inst = (GameObject)PrefabUtility.InstantiatePrefab(asset, camOffset);
-            Undo.RegisterCreatedObjectUndo(inst, "PICO MCP mount hand interactor");
-            inst.name = markerName;
-            inst.transform.localPosition = Vector3.zero;
-            inst.transform.localRotation = Quaternion.identity;
-            inst.transform.localScale    = Vector3.one;
-            inst.SetActive(true);
-            return inst;
+            sourceGroup.name = markerName;
+            sourceGroup.SetParent(targetCamOffset, false);
+            sourceGroup.localPosition = Vector3.zero;
+            sourceGroup.localRotation = Quaternion.identity;
+            sourceGroup.localScale    = Vector3.one;
+            sourceGroup.gameObject.SetActive(true);
+            RepairRayOriginReferences(sourceGroup);
+        }
+
+        // Locate the top-level "XR Origin Hands (XR Rig)" prefab in the imported
+        // Hands Interaction Demo sample. We identify it structurally (XROrigin
+        // component on the root, `Camera Offset/Left Hand|Right Hand` under it),
+        // not by filename, so a future XRI rename does not silently break us.
+        static GameObject TryLocateHandsRigPrefab()
+        {
+            var xrOriginType = PXR_MCP_Common.FindLoadedType(TypeName_XROrigin);
+            foreach (var guid in AssetDatabase.FindAssets("t:Prefab"))
+            {
+                var path = AssetDatabase.GUIDToAssetPath(guid);
+                if (path.IndexOf(HandsInteractionDemoSample, StringComparison.OrdinalIgnoreCase) < 0)
+                    continue;
+
+                var go = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+                if (go == null) continue;
+                // Root must carry an XROrigin (when XRI's dependency is loaded).
+                if (xrOriginType != null && go.GetComponent(xrOriginType) == null)
+                    continue;
+
+                var camOffset = go.transform.Find(PXR_MCP_Common.CameraOffsetName);
+                if (camOffset == null) continue;
+                if (camOffset.Find(SampleHandGroupLeft) == null &&
+                    camOffset.Find(SampleHandGroupRight) == null)
+                    continue;
+
+                return go;
+            }
+            return null;
+        }
+
+        // Re-target NearFarInteractor + line-visual references at the hand's own
+        // "Aim Pose" child so the ray follows the hand instead of Camera Offset
+        // origin. All access is reflection so we do not force-link to a specific
+        // XRI major version at build time (R3). No-op when the components or the
+        // Aim Pose child are absent (e.g. hand path that swapped to a different
+        // interactor prefab structure).
+        static void RepairRayOriginReferences(Transform handGroup)
+        {
+            var aim = handGroup.Find(AimPoseChildName);
+            if (aim == null) return;
+
+            var attachType = PXR_MCP_Common.FindLoadedType(TypeName_InteractionAttachController);
+            var casterType = PXR_MCP_Common.FindLoadedType(TypeName_InteractionCasterBase);
+            var curveVisType = PXR_MCP_Common.FindLoadedType(TypeName_CurveVisualController);
+
+            // InteractionAttachController.transformToFollow — attach point that the
+            // NearFarInteractor snaps grabbed objects toward, and the far-ray
+            // pivot the sample uses. Property setter is public in XRI 3.x.
+            if (attachType != null)
+            {
+                foreach (var comp in handGroup.GetComponentsInChildren(attachType, true))
+                    SetPropertyOrField(comp, "transformToFollow", "m_TransformToFollow", aim);
+            }
+
+            // Both SphereInteractionCaster + CurveInteractionCaster inherit
+            // `castOrigin` from InteractionCasterBase — one property write covers
+            // near-cast AND far-cast origins.
+            if (casterType != null)
+            {
+                foreach (var comp in handGroup.GetComponentsInChildren(casterType, true))
+                    SetPropertyOrField(comp, "castOrigin", "m_CastOrigin", aim);
+            }
+
+            // The rendered curve (LineRenderer) is driven by CurveVisualController.
+            // Without a lineOriginTransform it snaps to its own GameObject (the
+            // LineVisual child of the interactor) which is again pinned at Camera
+            // Offset — same visual defect as the caster origins.
+            if (curveVisType != null)
+            {
+                foreach (var comp in handGroup.GetComponentsInChildren(curveVisType, true))
+                    SetPropertyOrField(comp, "lineOriginTransform", "m_LineOriginTransform", aim);
+            }
+        }
+
+        // Small reflection helper: set a public property when it exists, otherwise
+        // fall back to a serialized private field. Both are used across XRI
+        // versions (public setters in 3.x, direct m_* fields in 2.x prefab data).
+        static void SetPropertyOrField(UnityEngine.Object target, string propertyName, string fieldName, object value)
+        {
+            if (target == null) return;
+            var t = target.GetType();
+            var prop = t.GetProperty(propertyName,
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+            if (prop != null && prop.CanWrite && prop.PropertyType.IsInstanceOfType(value))
+            {
+                Undo.RecordObject(target, "PICO MCP repair hand ray origin");
+                prop.SetValue(target, value);
+                EditorUtility.SetDirty(target);
+                return;
+            }
+            var field = t.GetField(fieldName,
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            if (field != null && field.FieldType.IsInstanceOfType(value))
+            {
+                Undo.RecordObject(target, "PICO MCP repair hand ray origin");
+                field.SetValue(target, value);
+                EditorUtility.SetDirty(target);
+            }
         }
 
         // Resolve any known XRI interactor component type (3.x first, 2.x fallback).
@@ -1051,10 +1245,12 @@ namespace ByteDance.PICO.MCPExtensions.Editor
         }
 
         // Scan the imported XRI "Hands Interaction Demo" sample folder for the
-        // left/right hand-interactor prefabs. A prefab qualifies when it carries one
-        // of the known XRI interactor components AND its path is inside the sample
-        // folder. Left/right are disambiguated by name ("left"/"right"). Version-
-        // agnostic (R3): no hardcoded prefab names or sample sub-paths.
+        // left/right hand-interactor prefabs. Kept only as a legacy helper —
+        // superseded by TryLocateHandsRigPrefab(), which extracts the interactor
+        // groups directly out of the top-level rig prefab so prefab overrides
+        // (see defect ③) survive the reparent. Reserved here for callers that
+        // still want a plain "does the sample expose any left/right leaf
+        // interactor prefab" boolean.
         static bool AnyInteractorPrefabInSample(out GameObject leftPrefab, out GameObject rightPrefab)
         {
             leftPrefab = null;
