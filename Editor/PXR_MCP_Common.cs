@@ -161,14 +161,36 @@ namespace ByteDance.PICO.MCPExtensions.Editor
         {
             if (originGo == null) return;
             var camOffset = originGo.transform.Find(CameraOffsetName);
+            GameObject left = null, right = null;
             if (camOffset != null)
             {
-                var left  = camOffset.Find(LeftControllerName);
-                var right = camOffset.Find(RightControllerName);
-                if (left  != null) SetGameObjectActive(left.gameObject,  visible, "PICO MCP toggle Left Controller");
-                if (right != null) SetGameObjectActive(right.gameObject, visible, "PICO MCP toggle Right Controller");
+                var l = camOffset.Find(LeftControllerName);
+                var r = camOffset.Find(RightControllerName);
+                left  = l != null ? l.gameObject : null;
+                right = r != null ? r.gameObject : null;
+                if (left  != null) SetGameObjectActive(left,  visible, "PICO MCP toggle Left Controller");
+                if (right != null) SetGameObjectActive(right, visible, "PICO MCP toggle Right Controller");
             }
             SetComponentEnabledByTypeName(originGo, TypeName_XRInputModalityManager, visible);
+
+            // Defect ① counterpart: keep the XRInputModalityManager's controller
+            // members in sync with controller ownership. On enable, (re)bind them to
+            // the Left/Right Controller GameObjects so XRI's hand<->controller
+            // auto-switch works; on disable, null them so a still-enabled manager
+            // (kept alive by the hand module) can never resurface a controller the
+            // user did not ask for. Reflection-guarded (R3); no-op if XRI absent.
+            var t = FindTypeInLoadedAssemblies(TypeName_XRInputModalityManager);
+            if (t != null)
+            {
+                var mgr = originGo.GetComponent(t) as Behaviour;
+                if (mgr != null)
+                {
+                    Undo.RecordObject(mgr, "PICO MCP sync controller refs on modality manager");
+                    SetGameObjectMember(mgr, "leftController",  visible ? left  : null);
+                    SetGameObjectMember(mgr, "rightController", visible ? right : null);
+                    EditorUtility.SetDirty(mgr);
+                }
+            }
         }
 
         // Hand module: wire the mounted hand GameObjects into the XR Origin's
@@ -189,6 +211,22 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             Undo.RecordObject(mgr, "PICO MCP wire hands to XRInputModalityManager");
             if (leftHand  != null) SetGameObjectMember(mgr, "leftHand",  leftHand);
             if (rightHand != null) SetGameObjectMember(mgr, "rightHand", rightHand);
+
+            // Defect ① fix: the XRI Starter Assets rig bakes generic (NON-PICO)
+            // controller references into the manager's leftController/rightController
+            // members. Once the manager is enabled, it re-activates those generic
+            // controller GameObjects whenever a controller device is (or defaults to)
+            // tracked — so a HAND-ONLY enable would wrongly surface a non-PICO
+            // controller alongside the hands. Whether a controller appears — and that
+            // its model is the PICO prefab — is owned SOLELY by pico_xr_controller.
+            // So when the Controller module is NOT active, null the controller members
+            // so the manager can only drive the hands. pico_xr_controller.enable
+            // (SetControllerModuleVisible true) re-binds them.
+            if (!IsControllerModuleActive(originGo))
+            {
+                SetGameObjectMember(mgr, "leftController",  null);
+                SetGameObjectMember(mgr, "rightController", null);
+            }
             // The manager must be enabled for the auto-switch loop to run.
             if (!mgr.enabled) mgr.enabled = true;
             EditorUtility.SetDirty(mgr);
