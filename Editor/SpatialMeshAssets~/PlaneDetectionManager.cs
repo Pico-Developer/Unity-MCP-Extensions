@@ -185,7 +185,7 @@ public class PlaneDetectionManager : MonoBehaviour
         else
         {
             plane = Instantiate(meshPrefab, meshContainer);
-            pool.Enqueue(plane);
+            plane.SetActive(true);
         }
         var renderer = plane.GetComponent<MeshRenderer>();
         MaterialPropertyBlock props = new();
