@@ -71,9 +71,21 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             Undo.RecordObject(cam, "PICO MCP VST configure camera");
             cam.clearFlags = CameraClearFlags.SolidColor;
             cam.backgroundColor = new Color(0, 0, 0, 0);
-#if ENABLE_PICO_XR_SDK
+#if ENABLE_PICO_XR_SDK || ENABLE_PICO_OPENXR_SDK
+            // PXR_CameraEffectBlock compiles on both the PICO-native and PICO OpenXR
+            // paths (its own guard is `ENABLE_PICO_XR_SDK || ENABLE_PICO_OPENXR_SDK`)
+            // and the SDK VST building block adds it on both. Mount it whenever
+            // either PICO SDK define is set.
             if (cam.gameObject.GetComponent<PXR_CameraEffectBlock>() == null)
                 Undo.AddComponent<PXR_CameraEffectBlock>(cam.gameObject);
+#endif
+#if ENABLE_PICO_OPENXR_SDK
+            // OpenXR runtime path: passthrough is gated by the PICO PassthroughFeature
+            // OpenXR feature, which must be enabled on the Android build target (the
+            // native path does not need it). Mirrors the SDK VST building block's
+            // `EnableOpenXRFeature<PassthroughFeature>()`. Reflection-resolved (R3);
+            // a no-op if the PICO OpenXR SDK is not installed.
+            PXR_MCP_Common.EnableOpenXRFeature(PXR_MCP_Common.OpenXRFeature_Passthrough);
 #endif
             // Turn on the project-level Video See-Through flag so PXR_BuildProcessor
             // emits enable_vst in the Android manifest (the shared PXR_Manager
@@ -318,9 +330,26 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             detail = null;
             if (!PXR_MCP_VST.Ensure()) { detail = "VST dependency could not be ensured; see Unity Console."; return EnsureOutcome.Error; } // dependency
 
-            // MR sense-data (Spatial Mesh) requires PICO Stereo Rendering = MultiPass
-            // (Multiview mis-composites passthrough + the sense-data mesh on device).
+            // MR sense-data (Spatial Mesh) requires MultiPass stereo rendering
+            // (single-pass/Multiview mis-composites passthrough + the sense-data
+            // mesh on device). The stereo mode lives in a DIFFERENT place per
+            // runtime, so these are two independent branches that must not touch
+            // each other's setting:
+            //   * OpenXR runtime : OpenXRSettings.renderMode        (Render Mode)
+            //   * PICO   runtime : PXR_Settings.stereoRenderingMode (Stereo Rendering Mode)
+#if ENABLE_PICO_OPENXR_SDK
+            // OpenXR runtime path: force OpenXR Render Mode = MultiPass, then enable
+            // the PICO PICOSpatialMesh OpenXR feature on the Android build target
+            // (passthrough is already enabled by VST.Ensure above). Mirrors the SDK
+            // Spatial Mesh building block's
+            // `EnableOpenXRFeature<PassthroughFeature>() + EnableOpenXRFeature<PICOSpatialMesh>()`.
+            // Reflection-resolved (R3); a no-op if the PICO OpenXR SDK is absent.
+            PXR_MCP_Common.SetOpenXRRenderModeMultiPass();
+            PXR_MCP_Common.EnableOpenXRFeature(PXR_MCP_Common.OpenXRFeature_SpatialMesh);
+#else
+            // PICO-native runtime path: force PICO Stereo Rendering = MultiPass.
             PXR_MCP_Common.SetPicoStereoRenderingMultiPass();
+#endif
 
             // Idempotent copy of the bundled assets into the project.
             if (!ImportBundledAssets(out var importDetail)) { detail = importDetail; return EnsureOutcome.Error; }
@@ -334,7 +363,7 @@ namespace ByteDance.PICO.MCPExtensions.Editor
                 detail = "SpatialMeshManager assets imported to " + ProjectAssetsDir +
                          ". The Editor is (re)compiling; poll pico_xr_status until the MCP bridge returns, " +
                          "then call pico_xr_spatial_mesh(action=enable) again to mount and configure the driver. " +
-                         "If the type never appears, verify the PICO XR SDK is installed (the driver is guarded by ENABLE_PICO_XR_SDK).";
+                         "If the type never appears, verify a PICO XR SDK is installed (the driver is guarded by ENABLE_PICO_XR_SDK || ENABLE_PICO_OPENXR_SDK).";
                 return EnsureOutcome.ImportingRecompile;
             }
 
@@ -628,10 +657,26 @@ namespace ByteDance.PICO.MCPExtensions.Editor
         public static EnsureOutcome Ensure(out string detail)
         {
             detail = null;
+#if ENABLE_PICO_OPENXR_SDK
+            // PLANE DETECTION IS PICO-NATIVE ONLY. PICO ships NO plane-detection
+            // OpenXR feature (unlike Spatial Mesh, which has PICOSpatialMesh): the
+            // plane sense-data provider is created ONLY inside the native PXR_Loader
+            // (UPxr_CreatePlaneDetectionSenseDataProvider), so under the OpenXR
+            // runtime the provider never exists, PXR_Manager.PlaneDetectionDataUpdated
+            // never fires and QueryPlaneAnchorAsync has nothing to query. Refuse here
+            // rather than mounting a driver that would silently never receive data.
+            detail = "Plane detection is not supported on the PICO OpenXR runtime — PICO ships no " +
+                     "plane-detection OpenXR feature (the sense-data provider is created only by the " +
+                     "PICO-native runtime). Switch Project Settings > XR Plug-in Management (Android) to " +
+                     "the PICO (native) loader, re-open the scene, then enable plane detection again.";
+            return EnsureOutcome.Error;
+#else
             if (!PXR_MCP_VST.Ensure()) { detail = "VST dependency could not be ensured; see Unity Console."; return EnsureOutcome.Error; } // dependency
 
-            // MR sense-data (Plane Detection) requires PICO Stereo Rendering = MultiPass
-            // (Multiview mis-composites passthrough + the sense-data mesh on device).
+            // MR sense-data (Plane Detection) requires MultiPass stereo rendering
+            // (single-pass/Multiview mis-composites passthrough + the sense-data
+            // mesh on device). Plane detection runs on the PICO-native runtime only,
+            // so the stereo mode lives in PXR_Settings.stereoRenderingMode.
             PXR_MCP_Common.SetPicoStereoRenderingMultiPass();
 
             // Import the shared wireframe visual assets (shaders + materials + mesh
@@ -654,7 +699,7 @@ namespace ByteDance.PICO.MCPExtensions.Editor
                 detail = "PlaneDetectionManager driver imported to " + PXR_MCP_SpatialMesh.ProjectDir +
                          ". The Editor is (re)compiling; poll pico_xr_status until the MCP bridge returns, " +
                          "then call pico_xr_plane(action=enable) again to mount and configure the driver. " +
-                         "If the type never appears, verify the PICO XR SDK is installed (the driver is guarded by ENABLE_PICO_XR_SDK).";
+                         "If the type never appears, verify a PICO XR SDK is installed (the driver is guarded by ENABLE_PICO_XR_SDK).";
                 return EnsureOutcome.ImportingRecompile;
             }
 
@@ -702,6 +747,7 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             Debug.Log("[PICO MCP] Plane: PlaneDetectionManager mounted and configured.");
             detail = "PlaneDetectionManager mounted and configured.";
             return EnsureOutcome.Configured;
+#endif
         }
 
 #if PICO_MCP_SHOW_MENU
@@ -749,8 +795,22 @@ namespace ByteDance.PICO.MCPExtensions.Editor
     public static class PXR_MCP_Hand
     {
         // Dynamic-search prefab names (no hardcoded package version path; R3).
+        // PICO-NATIVE hand models (root component = PXR_Hand, compiled ONLY under
+        // ENABLE_PICO_XR_SDK). Used on the native path.
         public const string HandLeftPrefabName  = "HandLeft";
         public const string HandRightPrefabName = "HandRight";
+
+        // OpenXR hand models. The PICO HandLeft/HandRight prefabs above are rooted
+        // on the native PXR_Hand driver, which compiles ONLY under ENABLE_PICO_XR_SDK;
+        // mounting them under the (mutually-exclusive) ENABLE_PICO_OPENXR_SDK path
+        // leaves a missing-script on the prefab root. Mirror the PICO SDK's own
+        // OpenXR hand building block (GenerateXRHands): mount the Unity XR Hands
+        // "HandVisualizer" prefabs instead, driven by XRHandSkeletonDriver which is
+        // always compiled with com.unity.xr.hands on the OpenXR path.
+        const string XrHandsPackageName    = "com.unity.xr.hands";
+        const string HandVisualizerSample  = "HandVisualizer";
+        const string XrHandLeftPrefabName  = "Left Hand Tracking";
+        const string XrHandRightPrefabName = "Right Hand Tracking";
         // Agent-owned instance names double as idempotency markers (R1).
         public const string MarkerLeft  = "[PICO_MCP] Hand Left";
         public const string MarkerRight = "[PICO_MCP] Hand Right";
@@ -822,9 +882,9 @@ namespace ByteDance.PICO.MCPExtensions.Editor
         // OpenXR reflection targets for the pinch->grab feature chain (R3). Present
         // only when the Unity OpenXR + XR Hands packages (and the PICO OpenXR SDK)
         // are installed; absent on the PICO-native input path, in which case the
-        // feature enable is a harmless no-op.
-        const string TypeName_OpenXRSettings   = "UnityEngine.XR.OpenXR.OpenXRSettings";
-        const string TypeName_OpenXRFeature    = "UnityEngine.XR.OpenXR.Features.OpenXRFeature";
+        // feature enable is a harmless no-op. The generic OpenXRSettings/OpenXRFeature
+        // reflection now lives in PXR_MCP_Common.EnableOpenXRFeature(); these two are
+        // just the PICO hand feature type names passed to that shared helper.
         const string TypeName_HandTracking     = "UnityEngine.XR.Hands.OpenXR.HandTracking";
         const string TypeName_HandInteraction  = "UnityEngine.XR.OpenXR.Features.Interactions.HandInteractionProfile";
 
@@ -890,9 +950,19 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             var camOffset = origin.transform.Find(PXR_MCP_Common.CameraOffsetName);
             if (camOffset == null) { detail = "Camera Offset not found under the XR Origin"; return EnsureOutcome.Error; }
 
-            // ---- Phase A: PICO hand models + tracking (idempotent per-hand) ----
+            // ---- Phase A: hand models + tracking (idempotent per-hand) ----
             if (camOffset.Find(MarkerLeft) == null || camOffset.Find(MarkerRight) == null)
             {
+#if ENABLE_PICO_OPENXR_SDK
+                // OpenXR runtime: mount the Unity XR Hands "HandVisualizer" models
+                // (root = XRHandSkeletonDriver, always compiled with com.unity.xr.hands
+                // on the OpenXR path). The PICO HandLeft/HandRight prefabs are rooted on
+                // the native PXR_Hand driver, which is NOT compiled under
+                // ENABLE_PICO_OPENXR_SDK — mounting them here would leave a missing
+                // script on the prefab root. Mirrors the SDK's GenerateXRHands().
+                var outA = EnsureOpenXRHandModels(camOffset, origin, out var openxrDetail);
+                if (outA != EnsureOutcome.Configured) { detail = openxrDetail; return outA; }
+#else
                 var leftAsset  = LocateHandPrefab(HandLeftPrefabName);
                 var rightAsset = LocateHandPrefab(HandRightPrefabName);
                 if (leftAsset == null || rightAsset == null)
@@ -916,6 +986,7 @@ namespace ByteDance.PICO.MCPExtensions.Editor
                 // if it could not be applied (hands would mount but never track).
                 if (!EnableHandTrackingProjectSetting())
                     Debug.LogWarning("[PICO MCP] Hands mounted but PXR_ProjectSetting.handTracking could not be applied — tracking will not run until Hand Tracking is enabled in PICO XR project settings.");
+#endif
 
                 // Enable the OpenXR HandTracking + HandInteractionProfile features so
                 // hand pinch is delivered as an XRI select input (the pinch->grab chain).
@@ -973,6 +1044,82 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             inst.transform.localScale    = Vector3.one;
             inst.SetActive(true);
             return inst;
+        }
+
+        // -----------------------------------------------------------------
+        // OpenXR hand MODELS (defect ① — missing PXR_Hand script under OpenXR)
+        // -----------------------------------------------------------------
+        // On the OpenXR runtime the PICO HandLeft/HandRight prefabs cannot be used:
+        // their root component PXR_Hand compiles ONLY under ENABLE_PICO_XR_SDK (the
+        // symbol is mutually exclusive with ENABLE_PICO_OPENXR_SDK), so mounting them
+        // here leaves "The associated script can not be loaded" on the prefab root.
+        // Mirror the PICO SDK's own OpenXR hand building block (GenerateXRHands):
+        // mount the Unity XR Hands "HandVisualizer" prefabs (Left/Right Hand Tracking),
+        // whose root XRHandSkeletonDriver is always compiled with com.unity.xr.hands
+        // on this path. Two-phase like the interactor rig: if the sample isn't on disk
+        // we import it and ask the caller to settle-loop then re-enable.
+        static EnsureOutcome EnsureOpenXRHandModels(Transform camOffset, GameObject origin, out string detail)
+        {
+            detail = null;
+
+            var leftAsset  = LocateXrHandPrefab(XrHandLeftPrefabName);
+            var rightAsset = LocateXrHandPrefab(XrHandRightPrefabName);
+            if (leftAsset == null || rightAsset == null)
+            {
+                var imp = PXR_MCP_PackageOps.ImportSample(XrHandsPackageName, HandVisualizerSample);
+                if (imp == null || !imp.ok || imp.skipped)
+                {
+                    detail = "Could not import the XR Hands '" + HandVisualizerSample + "' sample" +
+                             (imp != null && !string.IsNullOrEmpty(imp.error) ? ": " + imp.error : "") +
+                             (imp != null && imp.skipped ? " (" + imp.warning + ")" : "") +
+                             ". Install " + XrHandsPackageName + " and retry.";
+                    return EnsureOutcome.Error;
+                }
+
+                AssetDatabase.Refresh();
+                leftAsset  = LocateXrHandPrefab(XrHandLeftPrefabName);
+                rightAsset = LocateXrHandPrefab(XrHandRightPrefabName);
+                if (leftAsset == null || rightAsset == null)
+                {
+                    detail = "XR Hands '" + HandVisualizerSample + "' sample imported; the Editor is " +
+                             "(re)importing/compiling. Poll pico_xr_status until the MCP bridge returns, " +
+                             "then call pico_xr_hand(action=enable) again to mount the hand models.";
+                    return EnsureOutcome.ImportingRecompile;
+                }
+            }
+
+            var leftInst  = MountHand(camOffset, leftAsset,  MarkerLeft);
+            var rightInst = MountHand(camOffset, rightAsset, MarkerRight);
+
+            // Wire the mounted hands into the XR Origin's XRInputModalityManager so
+            // XRI natively hides them whenever a controller becomes tracked (same as
+            // the native path).
+            PXR_MCP_Common.WireHandsToModalityManager(origin, leftInst, rightInst);
+
+            // handTracking is the same PICO project gate on both runtimes; set it via
+            // reflection (R3). Non-fatal warning if it could not be applied.
+            if (!EnableHandTrackingProjectSetting())
+                Debug.LogWarning("[PICO MCP] XR Hands models mounted but PXR_ProjectSetting.handTracking could not be applied — tracking will not run until Hand Tracking is enabled in PICO XR project settings.");
+
+            detail = "OpenXR XR Hands models mounted.";
+            return EnsureOutcome.Configured;
+        }
+
+        // Locate a Unity XR Hands HandVisualizer prefab ("Left Hand Tracking" /
+        // "Right Hand Tracking") dynamically inside the imported sample. Matches by
+        // exact prefab file name under an "XR Hands" sample path so we do not bind to
+        // a hardcoded package version (R3). Returns null when not yet imported.
+        static GameObject LocateXrHandPrefab(string prefabName)
+        {
+            foreach (var guid in AssetDatabase.FindAssets(prefabName + " t:Prefab"))
+            {
+                var path = AssetDatabase.GUIDToAssetPath(guid);
+                if (path.IndexOf("XR Hands", System.StringComparison.OrdinalIgnoreCase) < 0) continue;
+                if (!path.EndsWith("/" + prefabName + ".prefab", System.StringComparison.OrdinalIgnoreCase)) continue;
+                var asset = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+                if (asset != null) return asset;
+            }
+            return null;
         }
 
         // -----------------------------------------------------------------
@@ -1354,80 +1501,16 @@ namespace ByteDance.PICO.MCPExtensions.Editor
 
         // Enable the OpenXR HandTracking + HandInteractionProfile features on the
         // Android build target so hand pinch surfaces as an XRI select input
-        // (the OpenXR pinch->grab chain). This faithfully mirrors the PICO SDK's
-        // PXR_Utils.EnableHandTrackingFeature() / EnableOpenXRFeature<T>():
-        //   * target BuildTargetGroup.Android,
-        //   * iterate settings.GetFeatures<OpenXRFeature>(),
-        //   * flip enabled=true on the HandTracking and HandInteractionProfile
-        //     features that are currently off,
-        //   * SetDirty(settings) + SaveAssets + NotifySettingsProviderChanged().
-        // Done via reflection (R3) so we never hard-depend on the OpenXR / XR Hands
-        // assemblies; a missing type just makes this a silent no-op (native path).
+        // (the OpenXR pinch->grab chain). Delegates to the shared
+        // PXR_MCP_Common.EnableOpenXRFeature() (which mirrors the PICO SDK's
+        // PXR_Utils.EnableOpenXRFeature<T>(): target BuildTargetGroup.Android,
+        // iterate GetFeatures<OpenXRFeature>(), flip enabled=true, SetDirty +
+        // SaveAssets + NotifySettingsProviderChanged). Reflection-guarded (R3) so a
+        // missing OpenXR / XR Hands assembly is a silent no-op (native path).
         static void EnableOpenXRHandInteractionFeature()
         {
-            try
-            {
-                var settingsType = FindType(TypeName_OpenXRSettings);
-                var featureBase  = FindType(TypeName_OpenXRFeature);
-                if (settingsType == null || featureBase == null)
-                    return; // OpenXR SDK not installed — native input path, nothing to do.
-
-                var handTrackingType    = FindType(TypeName_HandTracking);
-                var handInteractionType = FindType(TypeName_HandInteraction);
-                if (handTrackingType == null && handInteractionType == null)
-                    return; // neither feature present — nothing to enable.
-
-                // OpenXRSettings.GetSettingsForBuildTargetGroup(BuildTargetGroup.Android)
-                var getSettings = settingsType.GetMethod("GetSettingsForBuildTargetGroup",
-                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-                if (getSettings == null) return;
-                var settings = getSettings.Invoke(null, new object[] { BuildTargetGroup.Android });
-                if (settings == null) return;
-
-                // settings.GetFeatures<OpenXRFeature>()
-                var getFeaturesGeneric = settingsType
-                    .GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
-                    .FirstOrDefault(m => m.Name == "GetFeatures" && m.IsGenericMethod && m.GetParameters().Length == 0);
-                if (getFeaturesGeneric == null) return;
-                var features = getFeaturesGeneric.MakeGenericMethod(featureBase).Invoke(settings, null) as System.Collections.IEnumerable;
-                if (features == null) return;
-
-                bool changed = false;
-                var enabledProp = featureBase.GetProperty("enabled",
-                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                if (enabledProp == null) return;
-
-                foreach (var feature in features)
-                {
-                    if (feature == null) continue;
-                    var ft = feature.GetType();
-                    bool isTarget = (handTrackingType != null && handTrackingType.IsAssignableFrom(ft))
-                                 || (handInteractionType != null && handInteractionType.IsAssignableFrom(ft));
-                    if (!isTarget) continue;
-
-                    var isOn = enabledProp.GetValue(feature) as bool?;
-                    if (isOn == true) continue;
-                    enabledProp.SetValue(feature, true);
-                    changed = true;
-                    Debug.Log("[PICO MCP] Enabled OpenXR feature: " + ft.Name + " (Android).");
-                }
-
-                if (changed)
-                {
-                    EditorUtility.SetDirty((UnityEngine.Object)settings);
-                    AssetDatabase.SaveAssets();
-                    // SettingsService.NotifySettingsProviderChanged() so the OpenXR
-                    // settings UI refreshes — mirrors the SDK. Reflection-guarded.
-                    var settingsService = FindType("UnityEditor.SettingsService");
-                    var notify = settingsService?.GetMethod("NotifySettingsProviderChanged",
-                        System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-                    notify?.Invoke(null, null);
-                }
-            }
-            catch (Exception e)
-            {
-                Debug.LogWarning("[PICO MCP] Could not enable OpenXR hand-interaction feature (pinch->grab may not fire): " + e.Message);
-            }
+            PXR_MCP_Common.EnableOpenXRFeature(TypeName_HandTracking);
+            PXR_MCP_Common.EnableOpenXRFeature(TypeName_HandInteraction);
         }
 
         // Defect ② (part 2) — ADD the PICO hand pinch/grasp device bindings to the
