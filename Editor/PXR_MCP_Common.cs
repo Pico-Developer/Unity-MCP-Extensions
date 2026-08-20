@@ -75,6 +75,11 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             if (existing != null)
             {
                 ApplyFloorTrackingOrigin(existing.gameObject);
+                // PXR_Manager is the shared PICO system event dispatcher every MR
+                // feature (VST / SpatialMesh / Plane / HandTracking) relies on.
+                // Ensure it on every EnsureXROrigin so a rig created before this
+                // code shipped is upgraded in place. Idempotent.
+                EnsurePxrManager(existing.gameObject);
                 // Re-assert the single-active-camera invariant on every ensure so
                 // cameras added after the origin was created are also collapsed.
                 EnsureSingleActiveCamera(existing.gameObject);
@@ -95,6 +100,12 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             instance.name = AgentOriginName;
 
             ApplyFloorTrackingOrigin(instance);
+
+            // Attach the shared PICO system manager to the XR Origin ROOT (this is
+            // where the PICO Building Blocks flow puts it, and where PXR_Manager
+            // expects to sit — above the Main Camera). Without it the SensePack
+            // providers never deliver data to VST / SpatialMesh / Plane.
+            EnsurePxrManager(instance);
 
             // Initial hide: keep only Main Camera + core XR Origin visible/active.
             // Any module a block depends on must be re-enabled by that block.
@@ -150,14 +161,36 @@ namespace ByteDance.PICO.MCPExtensions.Editor
         {
             if (originGo == null) return;
             var camOffset = originGo.transform.Find(CameraOffsetName);
+            GameObject left = null, right = null;
             if (camOffset != null)
             {
-                var left  = camOffset.Find(LeftControllerName);
-                var right = camOffset.Find(RightControllerName);
-                if (left  != null) SetGameObjectActive(left.gameObject,  visible, "PICO MCP toggle Left Controller");
-                if (right != null) SetGameObjectActive(right.gameObject, visible, "PICO MCP toggle Right Controller");
+                var l = camOffset.Find(LeftControllerName);
+                var r = camOffset.Find(RightControllerName);
+                left  = l != null ? l.gameObject : null;
+                right = r != null ? r.gameObject : null;
+                if (left  != null) SetGameObjectActive(left,  visible, "PICO MCP toggle Left Controller");
+                if (right != null) SetGameObjectActive(right, visible, "PICO MCP toggle Right Controller");
             }
             SetComponentEnabledByTypeName(originGo, TypeName_XRInputModalityManager, visible);
+
+            // Defect ① counterpart: keep the XRInputModalityManager's controller
+            // members in sync with controller ownership. On enable, (re)bind them to
+            // the Left/Right Controller GameObjects so XRI's hand<->controller
+            // auto-switch works; on disable, null them so a still-enabled manager
+            // (kept alive by the hand module) can never resurface a controller the
+            // user did not ask for. Reflection-guarded (R3); no-op if XRI absent.
+            var t = FindTypeInLoadedAssemblies(TypeName_XRInputModalityManager);
+            if (t != null)
+            {
+                var mgr = originGo.GetComponent(t) as Behaviour;
+                if (mgr != null)
+                {
+                    Undo.RecordObject(mgr, "PICO MCP sync controller refs on modality manager");
+                    SetGameObjectMember(mgr, "leftController",  visible ? left  : null);
+                    SetGameObjectMember(mgr, "rightController", visible ? right : null);
+                    EditorUtility.SetDirty(mgr);
+                }
+            }
         }
 
         // Hand module: wire the mounted hand GameObjects into the XR Origin's
@@ -178,6 +211,22 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             Undo.RecordObject(mgr, "PICO MCP wire hands to XRInputModalityManager");
             if (leftHand  != null) SetGameObjectMember(mgr, "leftHand",  leftHand);
             if (rightHand != null) SetGameObjectMember(mgr, "rightHand", rightHand);
+
+            // Defect ① fix: the XRI Starter Assets rig bakes generic (NON-PICO)
+            // controller references into the manager's leftController/rightController
+            // members. Once the manager is enabled, it re-activates those generic
+            // controller GameObjects whenever a controller device is (or defaults to)
+            // tracked — so a HAND-ONLY enable would wrongly surface a non-PICO
+            // controller alongside the hands. Whether a controller appears — and that
+            // its model is the PICO prefab — is owned SOLELY by pico_xr_controller.
+            // So when the Controller module is NOT active, null the controller members
+            // so the manager can only drive the hands. pico_xr_controller.enable
+            // (SetControllerModuleVisible true) re-binds them.
+            if (!IsControllerModuleActive(originGo))
+            {
+                SetGameObjectMember(mgr, "leftController",  null);
+                SetGameObjectMember(mgr, "rightController", null);
+            }
             // The manager must be enabled for the auto-switch loop to run.
             if (!mgr.enabled) mgr.enabled = true;
             EditorUtility.SetDirty(mgr);
@@ -255,6 +304,158 @@ namespace ByteDance.PICO.MCPExtensions.Editor
                 Undo.RecordObject(origin, "PICO MCP: Set XR Origin Tracking Mode = Floor");
                 origin.RequestedTrackingOriginMode = XROrigin.TrackingOriginMode.Floor;
                 EditorUtility.SetDirty(origin);
+            }
+        }
+
+        // -----------------------------------------------------------------
+        // PICO system manager + project capability flags
+        // -----------------------------------------------------------------
+        // PXR_Manager is the PICO runtime event dispatcher: it polls the OS for
+        // sense-data events and fires the static events (SpatialMeshDataUpdated /
+        // PlaneDetectionDataUpdated / ...) that the per-feature runtime drivers
+        // subscribe to. The PICO Building Blocks flow attaches it to the XR Origin
+        // ROOT (cameraOrigin.AddComponent<PXR_Manager>()), and PXR_Manager.Awake()
+        // discovers cameras via GetComponentsInChildren<Camera>(), so it must sit
+        // ABOVE the Main Camera. We resolve the type by reflection (R3: the PICO
+        // SDK assembly / namespace may drift and this asmdef must not hard-bind a
+        // version). No-op when the SDK is absent.
+        const string TypeName_PXR_Manager     = "ByteDance.PICO.XR.PXR_Manager";
+        const string TypeName_PXR_Manager_Alt = "Unity.XR.PXR.PXR_Manager";
+
+        // Ensure a PXR_Manager component exists on the agent XR Origin root.
+        // Idempotent (R1), reflection-resolved (R3), Undo-tracked (R5). Returns the
+        // component or null when the PICO SDK type is unavailable.
+        public static Component EnsurePxrManager(GameObject originGo)
+        {
+            if (originGo == null) return null;
+            var t = FindLoadedType(TypeName_PXR_Manager) ?? FindLoadedType(TypeName_PXR_Manager_Alt);
+            if (t == null)
+            {
+                // PICO SDK not installed / define not set. Silent: features that
+                // need it (VST/SpatialMesh/Plane) already surface their own
+                // SDK-missing errors, and non-PICO rigs should not be spammed.
+                return null;
+            }
+            var existing = originGo.GetComponent(t);
+            if (existing != null) return existing;
+            var comp = Undo.AddComponent(originGo, t);
+            if (comp != null) EditorUtility.SetDirty(comp);
+            Debug.Log("[PICO MCP] PXR_Manager ensured on XR Origin root.");
+            return comp;
+        }
+
+        // PICO project-level capability flags (videoSeeThrough / spatialMesh /
+        // planeDetection / handTracking / ...) live on the PXR_ProjectSetting
+        // ScriptableObject, are drawn into the PXR_Manager Inspector by the SDK's
+        // custom editor, and are consumed at BUILD time to write the Android
+        // manifest system-features + permissions (enable_vst / enable_mesh_anchor /
+        // enable_plane_detection / SPATIAL_DATA). Mounting the runtime driver alone
+        // is NOT enough — the matching flag must be on or the OS delivers no data.
+        // Each block sets ONLY its own flag on enable (so opting into VST does not
+        // silently request Spatial Mesh / Plane permissions).
+        const string TypeName_PXR_ProjectSetting     = "ByteDance.PICO.XR.PXR_ProjectSetting";
+        const string TypeName_PXR_ProjectSetting_Alt = "Unity.XR.PXR.PXR_ProjectSetting";
+
+        // Set a boolean capability flag on PXR_ProjectSetting by field name via
+        // reflection (R3). Returns true when the flag was found and set. No-op /
+        // false when the PICO SDK type or the field is absent. Persists via the
+        // SDK's static SaveAssets().
+        public static bool SetProjectCapability(string flagField, bool value)
+        {
+            if (string.IsNullOrEmpty(flagField)) return false;
+            var t = FindLoadedType(TypeName_PXR_ProjectSetting) ?? FindLoadedType(TypeName_PXR_ProjectSetting_Alt);
+            if (t == null) return false;
+            try
+            {
+                var getCfg = t.GetMethod("GetProjectConfig", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                if (getCfg == null) return false;
+                var cfg = getCfg.Invoke(null, null);
+                if (cfg == null) return false;
+
+                var field = cfg.GetType().GetField(flagField);
+                if (field == null || field.FieldType != typeof(bool)) return false;
+                var cur = (bool)field.GetValue(cfg);
+                if (cur != value)
+                {
+                    field.SetValue(cfg, value);
+                    var cfgObj = cfg as UnityEngine.Object;
+                    if (cfgObj != null) EditorUtility.SetDirty(cfgObj);
+                    var save = t.GetMethod("SaveAssets", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                    if (save != null) save.Invoke(null, null);
+                }
+                return true;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[PICO MCP] Could not set PXR_ProjectSetting." + flagField + " = " + value + ": " + e.Message);
+                return false;
+            }
+        }
+
+        // -----------------------------------------------------------------
+        // PICO Stereo Rendering Mode (MR sense-data requires MultiPass)
+        // -----------------------------------------------------------------
+        // The PICO Stereo Rendering Mode lives on the PXR_Settings ScriptableObject
+        // (namespace ByteDance.PICO.XR), stored via Unity's generic XR Management
+        // under the config-object key "ByteDance.PICO.XR.Settings" and surfaced in
+        // Project Settings > XR Plug-in Management > PICO > Stereo Rendering Mode.
+        // The MR sense-data features (Spatial Mesh / Plane Detection) require
+        // MultiPass: Multiview (single-pass-instanced) mis-composites passthrough +
+        // the sense-data mesh on device. So enabling either forces the mode to
+        // MultiPass. Reflection-resolved (R3: no hard PICO SDK version bind); the
+        // "MultiPass" enum member is matched by name (no numeric hardcode). No-op /
+        // false when the PICO SDK is absent or the field/member cannot be resolved.
+        const string TypeName_PXR_Settings     = "ByteDance.PICO.XR.PXR_Settings";
+        const string TypeName_PXR_Settings_Alt = "Unity.XR.PXR.PXR_Settings";
+        const string PXR_SettingsConfigKey     = "ByteDance.PICO.XR.Settings";
+
+        public static bool SetPicoStereoRenderingMultiPass()
+        {
+            var t = FindLoadedType(TypeName_PXR_Settings) ?? FindLoadedType(TypeName_PXR_Settings_Alt);
+            if (t == null) return false;
+            try
+            {
+                // Obtain the settings instance: prefer the SDK's own static
+                // accessor (GetSettings), else fall back to the generic XR
+                // Management config-object store keyed by PXR_SettingsConfigKey.
+                object settings = null;
+                var getSettings = t.GetMethod("GetSettings", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                if (getSettings != null) settings = getSettings.Invoke(null, null);
+                if (settings == null)
+                {
+                    if (EditorBuildSettings.TryGetConfigObject(PXR_SettingsConfigKey, out UnityEngine.Object cfg)) settings = cfg;
+                }
+                if (settings == null) return false;
+
+                var field = settings.GetType().GetField("stereoRenderingModeAndroid");
+                if (field == null || !field.FieldType.IsEnum) return false;
+
+                object multiPass = null;
+                foreach (var name in Enum.GetNames(field.FieldType))
+                {
+                    if (string.Equals(name, "MultiPass", StringComparison.OrdinalIgnoreCase))
+                    {
+                        multiPass = Enum.Parse(field.FieldType, name);
+                        break;
+                    }
+                }
+                if (multiPass == null) return false;
+
+                var cur = field.GetValue(settings);
+                if (!Equals(cur, multiPass))
+                {
+                    field.SetValue(settings, multiPass);
+                    var so = settings as UnityEngine.Object;
+                    if (so != null) EditorUtility.SetDirty(so);
+                    AssetDatabase.SaveAssets();
+                    Debug.Log("[PICO MCP] PICO Stereo Rendering Mode set to MultiPass.");
+                }
+                return true;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[PICO MCP] Could not set PICO Stereo Rendering Mode = MultiPass: " + e.Message);
+                return false;
             }
         }
 
