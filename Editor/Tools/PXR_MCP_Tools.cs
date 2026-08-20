@@ -232,6 +232,69 @@ namespace ByteDance.PICO.MCPExtensions.Tools
         }
 
         // =============================================================
+        // pico_xr_plane
+        // =============================================================
+        public enum PlaneAction { Enable, Disable, Status }
+
+        public class PlaneParams
+        {
+            [McpDescription("Operation to perform on the PICO Plane Detection block.",
+                Required = true, EnumType = typeof(PlaneAction))]
+            public string Action { get; set; }
+        }
+
+        [McpTool("pico_xr_plane",
+            "Enable, disable, or query PICO Plane Detection on the agent XR Origin. " +
+            "Plane Detection is the SensePack sibling of Spatial Mesh (same start-system / build / update " +
+            "lifecycle; the data source is PlaneDetection instead of SpatialMesh) and likewise depends on VST: " +
+            "enable VST first if it is not on. Like Spatial Mesh, Plane Detection renders through a custom " +
+            "bundled PlaneDetectionManager driver, so enable is TWO-PHASE: the first call copies the " +
+            "PlaneDetectionManager driver + shared shaders/materials/prefab into the project " +
+            "(Assets/PICO_MCP/SpatialMesh), which triggers an Editor recompile. When the response reports an " +
+            "import/recompile in progress, settle-loop on pico_xr_status until the MCP bridge returns, then " +
+            "call enable again to mount and configure the driver.")]
+        public static object PicoXrPlane(PlaneParams p)
+        {
+            try
+            {
+                switch (ParseEnum<PlaneAction>(p?.Action))
+                {
+                    case PlaneAction.Enable:
+                    {
+                        var outcome = PXR_MCP_Plane.Ensure(out var detail);
+                        switch (outcome)
+                        {
+                            case PXR_MCP_Plane.EnsureOutcome.Configured:
+                                return PXR_MCP_Result.Ok(
+                                    "Plane Detection enabled: PlaneDetectionManager mounted and configured.",
+                                    new { detail });
+                            case PXR_MCP_Plane.EnsureOutcome.ImportingRecompile:
+                                // Driver + assets landed; the Editor is (re)compiling. This is NOT an
+                                // error -- the caller must settle-loop on pico_xr_status and re-enable.
+                                return PXR_MCP_Result.Skipped(
+                                    "Plane Detection driver imported; Editor is recompiling. " +
+                                    "Poll pico_xr_status until the bridge returns, then call enable again.",
+                                    detail, new { recompiling = true });
+                            default:
+                                return PXR_MCP_Result.Error("Failed to enable Plane Detection.", detail);
+                        }
+                    }
+                    case PlaneAction.Disable:
+                        PXR_MCP_Plane.Remove();
+                        return PXR_MCP_Result.Ok("Plane Detection container removed.");
+                    case PlaneAction.Status:
+                    {
+                        var info = ProbePlaneStatus();
+                        return PXR_MCP_Result.Ok(
+                            info.installed ? "Plane Detection is enabled." : "Plane Detection is not enabled.", info);
+                    }
+                }
+                return PXR_MCP_Result.Error("Unknown action.", "action must be one of: enable, disable, status");
+            }
+            catch (Exception e) { return PXR_MCP_Result.FromException("pico_xr_plane", e); }
+        }
+
+        // =============================================================
         // pico_xr_hand
         // =============================================================
         public enum HandAction { Enable, Disable, Status }
@@ -245,7 +308,11 @@ namespace ByteDance.PICO.MCPExtensions.Tools
 
         [McpTool("pico_xr_hand",
             "Enable, disable, or query PICO hand tracking (virtual hands) on the agent XR Origin. " +
-            "Mounts the PICO HandLeft/HandRight models under Camera Offset and enables the hand-tracking project setting.")]
+            "Mounts the PICO HandLeft/HandRight models under Camera Offset, enables the hand-tracking " +
+            "project setting, AND mounts an XRI hand-interactor rig (from the XRI 'Hands Interaction Demo' " +
+            "sample) so a pinch can drive pico_xr_grab. Enable is TWO-PHASE the first time: it imports that " +
+            "sample (triggering an Editor recompile) and returns a recompiling status; settle-loop on " +
+            "pico_xr_status, then call enable again to mount the interactors.")]
         public static object PicoXrHand(HandParams p)
         {
             try
@@ -254,10 +321,26 @@ namespace ByteDance.PICO.MCPExtensions.Tools
                 {
                     case HandAction.Enable:
                     {
-                        var ok = PXR_MCP_Hand.Ensure();
-                        return ok
-                            ? PXR_MCP_Result.Ok("PICO hand models mounted on the agent XR Origin; hand tracking enabled.")
-                            : PXR_MCP_Result.Error("Failed to enable hand tracking.", "PXR_MCP_Hand.Ensure returned false (PICO hand prefabs missing?); see Unity Console.");
+                        var outcome = PXR_MCP_Hand.Ensure(out var detail);
+                        switch (outcome)
+                        {
+                            case PXR_MCP_Hand.EnsureOutcome.Configured:
+                                return PXR_MCP_Result.Ok(
+                                    "PICO hand models + XRI hand interactors mounted on the agent XR Origin; " +
+                                    "hand tracking enabled and a pinch can now drive pico_xr_grab. " +
+                                    (string.IsNullOrEmpty(detail) ? "" : detail));
+                            case PXR_MCP_Hand.EnsureOutcome.ImportingRecompile:
+                                return PXR_MCP_Result.Skipped(
+                                    "Hand models mounted; XRI 'Hands Interaction Demo' sample imported and the " +
+                                    "Editor is recompiling. Settle-loop on pico_xr_status until the bridge returns, " +
+                                    "then call pico_xr_hand(action=enable) again to mount the hand interactors.",
+                                    detail, new { recompiling = true });
+                            default:
+                                return PXR_MCP_Result.Error("Failed to enable hand tracking.",
+                                    string.IsNullOrEmpty(detail)
+                                        ? "PXR_MCP_Hand.Ensure returned Error (PICO hand prefabs missing?); see Unity Console."
+                                        : detail);
+                        }
                     }
                     case HandAction.Disable:
                         PXR_MCP_Hand.Remove();
@@ -272,6 +355,63 @@ namespace ByteDance.PICO.MCPExtensions.Tools
                 return PXR_MCP_Result.Error("Unknown action.", "action must be one of: enable, disable, status");
             }
             catch (Exception e) { return PXR_MCP_Result.FromException("pico_xr_hand", e); }
+        }
+
+        // =============================================================
+        // pico_xr_grab
+        // =============================================================
+        public enum GrabAction { Enable, Disable, Status, MakeGrabbable }
+
+        public class GrabParams
+        {
+            [McpDescription("Operation to perform on the PICO Grab (pick-up & drag) block.",
+                Required = true, EnumType = typeof(GrabAction))]
+            public string Action { get; set; }
+
+            [McpDescription("For action=make_grabbable: the name or full hierarchy path of the scene object to make grabbable. " +
+                            "Leave empty to spawn a sample grabbable cube in front of the rig for quick validation.")]
+            public string Target { get; set; }
+        }
+
+        [McpTool("pico_xr_grab",
+            "Enable, disable, query, or attach grabbable behaviour for PICO hand/controller pick-up & drag on the agent XR Origin. " +
+            "Grab is DECOUPLED from hand/controller: enable only guarantees a scene XRInteractionManager (the shared interaction broker) — " +
+            "pair it with pico_xr_controller or pico_xr_hand, which supply the interactor. make_grabbable upgrades a " +
+            "target object (or a spawned sample cube) with Collider + Rigidbody + XRGrabInteractable so it can be picked up and dragged.")]
+        public static object PicoXrGrab(GrabParams p)
+        {
+            try
+            {
+                switch (ParseEnum<GrabAction>(p?.Action))
+                {
+                    case GrabAction.Enable:
+                    {
+                        var ok = PXR_MCP_Grab.Ensure();
+                        return ok
+                            ? PXR_MCP_Result.Ok("Grab interaction broker ensured (scene XRInteractionManager present). Enable pico_xr_controller or pico_xr_hand for the interactor, then use action=make_grabbable to make an object pickable.")
+                            : PXR_MCP_Result.Error("Failed to enable grab.", "PXR_MCP_Grab.Ensure returned false (XRI missing?); see Unity Console.");
+                    }
+                    case GrabAction.Disable:
+                        PXR_MCP_Grab.Remove();
+                        return PXR_MCP_Result.Ok("Grab interaction broker removed (agent-owned manager host / sample cleaned up; user-authored grabbables left intact).");
+                    case GrabAction.MakeGrabbable:
+                    {
+                        var name = PXR_MCP_Grab.MakeGrabbable(p?.Target);
+                        return name != null
+                            ? PXR_MCP_Result.Ok("'" + name + "' is now grabbable (Collider + Rigidbody + XRGrabInteractable attached).", new { target = name })
+                            : PXR_MCP_Result.Error("Failed to make target grabbable.",
+                                "Target not found, or XRGrabInteractable type unavailable (XRI missing?); see Unity Console.");
+                    }
+                    case GrabAction.Status:
+                    {
+                        var info = ProbeGrabStatus();
+                        return PXR_MCP_Result.Ok(
+                            info.installed ? "PICO grab is enabled (interaction broker ready)." : "PICO grab is not enabled.", info);
+                    }
+                }
+                return PXR_MCP_Result.Error("Unknown action.", "action must be one of: enable, disable, status, make_grabbable");
+            }
+            catch (Exception e) { return PXR_MCP_Result.FromException("pico_xr_grab", e); }
         }
 
         // =============================================================
@@ -377,7 +517,7 @@ namespace ByteDance.PICO.MCPExtensions.Tools
         public class StatusParams { /* no parameters */ }
 
         [McpTool("pico_xr_status",
-            "Return a snapshot of all PICO XR blocks (VST, Controller, Locomotion, Spatial Mesh, Hand) plus the camera invariant on the agent XR Origin.")]
+            "Return a snapshot of all PICO XR blocks (VST, Controller, Locomotion, Spatial Mesh, Plane, Hand, Grab) plus the camera invariant on the agent XR Origin.")]
         public static object PicoXrStatus(StatusParams _)
         {
             try
@@ -388,7 +528,9 @@ namespace ByteDance.PICO.MCPExtensions.Tools
                     controller   = ProbeControllerStatus(),
                     locomotion   = ProbeLocomotionStatus(),
                     spatial_mesh = ProbeSpatialMeshStatus(),
+                    plane        = ProbePlaneStatus(),
                     hand         = ProbeHandStatus(),
+                    grab         = ProbeGrabStatus(),
                     camera       = ProbeCameraStatus(),
                 };
                 var result = PXR_MCP_Result.Ok("PICO XR status snapshot collected.", details);
@@ -485,6 +627,36 @@ namespace ByteDance.PICO.MCPExtensions.Tools
             };
         }
 
+        static BlockStatus ProbePlaneStatus()
+        {
+            var origin = PXR_MCP_Common.FindAgentOrigin();
+            if (origin == null) return new BlockStatus { installed = false, reason = "no agent XR Origin in scene" };
+
+            var container = origin.transform.Find(PXR_MCP_Plane.ContainerName);
+            if (container == null)
+                return new BlockStatus { installed = false, reason = "Plane container not present" };
+
+            // "installed" == the PlaneDetectionManager driver is actually mounted on
+            // the container. A bare container without the driver means enable is
+            // mid-flight (driver imported, not yet compiled/mounted) -> report
+            // not-installed with a settle hint.
+            var driverType = PXR_MCP_Common.FindLoadedType(PXR_MCP_Plane.DriverTypeName);
+            if (driverType == null)
+                return new BlockStatus
+                {
+                    installed = false,
+                    reason = "container present but PlaneDetectionManager type not loaded yet " +
+                             "(driver importing / Editor recompiling, or PICO XR SDK not installed)",
+                };
+
+            var mounted = container.GetComponent(driverType) != null;
+            return new BlockStatus
+            {
+                installed = mounted,
+                reason = mounted ? null : "container present but PlaneDetectionManager not mounted; call enable again",
+            };
+        }
+
         static BlockStatus ProbeHandStatus()
         {
             var origin = PXR_MCP_Common.FindAgentOrigin();
@@ -501,6 +673,24 @@ namespace ByteDance.PICO.MCPExtensions.Tools
             string reason = null;
             if (!installed && (left || right)) reason = "only one hand mounted; expected both Left and Right";
             return new BlockStatus { installed = installed, reason = reason };
+        }
+
+        static BlockStatus ProbeGrabStatus()
+        {
+            var origin = PXR_MCP_Common.FindAgentOrigin();
+            if (origin == null) return new BlockStatus { installed = false, reason = "no agent XR Origin in scene" };
+
+            // Grab is "installed" (interaction broker ready) when the marker is present.
+            var markerPresent = origin.transform.Find(PXR_MCP_Grab.MarkerChild) != null;
+            if (!markerPresent)
+                return new BlockStatus { installed = false, reason = "grab not enabled (no [PICO_MCP] Grab Marker)" };
+
+            // Surface a hint when the marker is there but no XRInteractionManager is
+            // in the scene — grabbing would be inert in that state.
+            if (!PXR_MCP_Grab.HasInteractionManager())
+                return new BlockStatus { installed = true, reason = "grab enabled but no XRInteractionManager in scene; interactions will be inert until one exists" };
+
+            return new BlockStatus { installed = true };
         }
 
         // Camera invariant probe: how many cameras actually render right now, and
