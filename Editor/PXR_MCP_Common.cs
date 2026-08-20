@@ -71,6 +71,14 @@ namespace ByteDance.PICO.MCPExtensions.Editor
         // Never touches foreign XR Origins.
         public static GameObject EnsureXROrigin()
         {
+#if ENABLE_PICO_OPENXR_SDK
+            // [PICO Required] project-validation: on the PICO OpenXR runtime the
+            // Default Orientation must be LandscapeLeft (the native path is not
+            // affected). Assert it here so every block (VST / SpatialMesh / Plane /
+            // Hand) leaves the OpenXR project passing the rule. Idempotent.
+            SetDefaultInterfaceOrientationLandscapeLeft();
+#endif
+
             var existing = FindAgentOrigin();
             if (existing != null)
             {
@@ -393,6 +401,26 @@ namespace ByteDance.PICO.MCPExtensions.Editor
         }
 
         // -----------------------------------------------------------------
+        // Default interface orientation ([PICO Required]: LandscapeLeft)
+        // -----------------------------------------------------------------
+        // OpenXR-only: PICO's project-validation "[PICO Required]" rule flags
+        // PlayerSettings.defaultInterfaceOrientation != UIOrientation.LandscapeLeft
+        // ("Using 'UIOrientation.LandscapeLeft'.") on the PICO OpenXR runtime; the
+        // native path does not surface this. Its FixIt simply sets LandscapeLeft.
+        // This is a plain UnityEditor PlayerSetting (no PICO SDK type), so set it
+        // directly — no reflection needed. Idempotent: only writes when the value
+        // differs. Guarded by ENABLE_PICO_OPENXR_SDK to keep the fix scoped to the
+        // OpenXR path (and to avoid an unused method on the native path).
+#if ENABLE_PICO_OPENXR_SDK
+        public static void SetDefaultInterfaceOrientationLandscapeLeft()
+        {
+            if (PlayerSettings.defaultInterfaceOrientation == UIOrientation.LandscapeLeft) return;
+            PlayerSettings.defaultInterfaceOrientation = UIOrientation.LandscapeLeft;
+            Debug.Log("[PICO MCP] PlayerSettings Default Orientation set to LandscapeLeft ([PICO Required], OpenXR).");
+        }
+#endif
+
+        // -----------------------------------------------------------------
         // PICO Stereo Rendering Mode (MR sense-data requires MultiPass)
         // -----------------------------------------------------------------
         // The PICO Stereo Rendering Mode lives on the PXR_Settings ScriptableObject
@@ -408,6 +436,23 @@ namespace ByteDance.PICO.MCPExtensions.Editor
         const string TypeName_PXR_Settings     = "ByteDance.PICO.XR.PXR_Settings";
         const string TypeName_PXR_Settings_Alt = "Unity.XR.PXR.PXR_Settings";
         const string PXR_SettingsConfigKey     = "ByteDance.PICO.XR.Settings";
+
+        // Which PICO runtime this MCP assembly was compiled against, decided by the
+        // scripting define set by XR Plug-in Management (see PXR_Utils: PICO loader ->
+        // ENABLE_PICO_XR_SDK, OpenXR loader -> ENABLE_PICO_OPENXR_SDK; mutually
+        // exclusive). Exposed in pico_xr_status so the agent can predict runtime-gated
+        // capabilities (e.g. plane detection is PICO-native only) BEFORE calling enable.
+        //   "native" -> PICO loader   |  "openxr" -> OpenXR loader  |  "none" -> neither
+        public static string RuntimeName()
+        {
+#if ENABLE_PICO_OPENXR_SDK
+            return "openxr";
+#elif ENABLE_PICO_XR_SDK
+            return "native";
+#else
+            return "none";
+#endif
+        }
 
         public static bool SetPicoStereoRenderingMultiPass()
         {
@@ -455,6 +500,156 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             catch (Exception e)
             {
                 Debug.LogWarning("[PICO MCP] Could not set PICO Stereo Rendering Mode = MultiPass: " + e.Message);
+                return false;
+            }
+        }
+
+        // -----------------------------------------------------------------
+        // OpenXR feature enabling (shared by VST / SpatialMesh / Plane / Hand)
+        // -----------------------------------------------------------------
+        // On the PICO OpenXR runtime, an MR capability is gated by an OpenXRFeature
+        // asset that must be ENABLED on the Android build target (mirrors the SDK's
+        // PXR_Utils.EnableOpenXRFeature<T>()). We can't hard-reference the OpenXR /
+        // PICO-OpenXR assemblies from this asmdef (they only exist on the OpenXR
+        // path), so everything is reflection-resolved (R3): a missing OpenXR SDK or
+        // feature type makes this a silent no-op (the PICO-native path needs none of
+        // it). This is the single place that logic lives; each block calls it under
+        // its own `#if ENABLE_PICO_OPENXR_SDK` branch with the PICO feature type name.
+        const string TypeName_OpenXRSettings = "UnityEngine.XR.OpenXR.OpenXRSettings";
+        const string TypeName_OpenXRFeature  = "UnityEngine.XR.OpenXR.Features.OpenXRFeature";
+
+        // PICO OpenXR feature type full names (namespace ByteDance.PICO.OpenXR).
+        // Passed to EnableOpenXRFeature() by the VST / SpatialMesh blocks. Kept here
+        // so the OpenXR-path type names live in one place.
+        public const string OpenXRFeature_Passthrough = "ByteDance.PICO.OpenXR.PassthroughFeature";
+        public const string OpenXRFeature_SpatialMesh = "ByteDance.PICO.OpenXR.PICOSpatialMesh";
+
+        // Enable a single OpenXR feature (identified by its full type name) on the
+        // Android build target. Iterates
+        // OpenXRSettings.GetSettingsForBuildTargetGroup(Android).GetFeatures<OpenXRFeature>(),
+        // flips enabled=true on every feature assignable to the named type that is
+        // currently off, then SetDirty + SaveAssets + NotifySettingsProviderChanged.
+        // Returns true when a feature of that type was found (already-enabled counts
+        // as found); false when the OpenXR SDK / feature type / settings are absent.
+        public static bool EnableOpenXRFeature(string featureTypeName)
+        {
+            if (string.IsNullOrEmpty(featureTypeName)) return false;
+            try
+            {
+                var settingsType = FindTypeInLoadedAssemblies(TypeName_OpenXRSettings);
+                var featureBase  = FindTypeInLoadedAssemblies(TypeName_OpenXRFeature);
+                if (settingsType == null || featureBase == null) return false; // OpenXR SDK absent — native path.
+
+                var targetType = FindTypeInLoadedAssemblies(featureTypeName);
+                if (targetType == null) return false; // that PICO OpenXR feature isn't installed.
+
+                var getSettings = settingsType.GetMethod("GetSettingsForBuildTargetGroup",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                if (getSettings == null) return false;
+                var settings = getSettings.Invoke(null, new object[] { BuildTargetGroup.Android });
+                if (settings == null) return false;
+
+                var getFeaturesGeneric = settingsType
+                    .GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+                    .FirstOrDefault(m => m.Name == "GetFeatures" && m.IsGenericMethod && m.GetParameters().Length == 0);
+                if (getFeaturesGeneric == null) return false;
+                var features = getFeaturesGeneric.MakeGenericMethod(featureBase).Invoke(settings, null) as System.Collections.IEnumerable;
+                if (features == null) return false;
+
+                var enabledProp = featureBase.GetProperty("enabled",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                if (enabledProp == null) return false;
+
+                bool found = false, changed = false;
+                foreach (var feature in features)
+                {
+                    if (feature == null) continue;
+                    if (!targetType.IsAssignableFrom(feature.GetType())) continue;
+                    found = true;
+                    var isOn = enabledProp.GetValue(feature) as bool?;
+                    if (isOn == true) continue;
+                    enabledProp.SetValue(feature, true);
+                    changed = true;
+                    Debug.Log("[PICO MCP] Enabled OpenXR feature: " + feature.GetType().Name + " (Android).");
+                }
+
+                if (changed)
+                {
+                    EditorUtility.SetDirty((UnityEngine.Object)settings);
+                    AssetDatabase.SaveAssets();
+                    // Refresh the OpenXR settings UI — mirrors the SDK. Reflection-guarded.
+                    var settingsService = FindTypeInLoadedAssemblies("UnityEditor.SettingsService");
+                    var notify = settingsService?.GetMethod("NotifySettingsProviderChanged",
+                        System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                    notify?.Invoke(null, null);
+                }
+                return found;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[PICO MCP] Could not enable OpenXR feature '" + featureTypeName + "': " + e.Message);
+                return false;
+            }
+        }
+
+        // Force the OpenXR Render Mode to MultiPass on the Android build target.
+        // This is the OpenXR-runtime counterpart of SetPicoStereoRenderingMultiPass()
+        // (which drives the PICO-native "Stereo Rendering Mode"). Under the OpenXR
+        // runtime the stereo mode lives on OpenXRSettings.renderMode (surfaced in
+        // Project Settings > XR Plug-in Management > OpenXR > Render Mode), NOT on
+        // PXR_Settings, so the two paths are independent: the caller invokes THIS
+        // under `#if ENABLE_PICO_OPENXR_SDK` and SetPicoStereoRenderingMultiPass()
+        // otherwise. The MR sense-data features (Spatial Mesh / Plane Detection)
+        // require MultiPass; SinglePassInstanced mis-composites passthrough + the
+        // sense-data mesh on device.
+        // Reflection-resolved (R3: no hard OpenXR SDK version bind); the enum member
+        // is matched by name ("MultiPass", no numeric hardcode). No-op / false when
+        // the OpenXR SDK is absent or the property/member cannot be resolved.
+        public static bool SetOpenXRRenderModeMultiPass()
+        {
+            var t = FindLoadedType(TypeName_OpenXRSettings);
+            if (t == null) return false;
+            try
+            {
+                // Obtain the settings instance via the OpenXR SDK's own static
+                // per-build-target accessor — the OpenXR counterpart of the PICO
+                // path's PXR_Settings.GetSettings().
+                object settings = null;
+                var getSettings = t.GetMethod("GetSettingsForBuildTargetGroup", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                if (getSettings != null) settings = getSettings.Invoke(null, new object[] { BuildTargetGroup.Android });
+                if (settings == null) return false;
+
+                // OpenXR surfaces the stereo mode as the PROPERTY renderMode (the PICO
+                // path uses the FIELD stereoRenderingModeAndroid) — the only structural
+                // difference between the two symmetric setters.
+                var prop = settings.GetType().GetProperty("renderMode");
+                if (prop == null || !prop.PropertyType.IsEnum) return false;
+
+                object multiPass = null;
+                foreach (var name in Enum.GetNames(prop.PropertyType))
+                {
+                    if (string.Equals(name, "MultiPass", StringComparison.OrdinalIgnoreCase))
+                    {
+                        multiPass = Enum.Parse(prop.PropertyType, name);
+                        break;
+                    }
+                }
+                if (multiPass == null) return false;
+
+                var cur = prop.GetValue(settings);
+                if (!Equals(cur, multiPass))
+                {
+                    prop.SetValue(settings, multiPass);
+                    var so = settings as UnityEngine.Object;
+                    if (so != null) EditorUtility.SetDirty(so);
+                    AssetDatabase.SaveAssets();
+                    Debug.Log("[PICO MCP] OpenXR Render Mode set to MultiPass (Android).");
+                }
+                return true;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("[PICO MCP] Could not set OpenXR Render Mode = MultiPass: " + e.Message);
                 return false;
             }
         }
