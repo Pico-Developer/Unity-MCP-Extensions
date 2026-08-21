@@ -524,6 +524,7 @@ namespace ByteDance.PICO.MCPExtensions.Tools
             {
                 var details = new
                 {
+                    runtime      = PXR_MCP_Common.RuntimeName(),
                     vst          = ProbeVstStatus(),
                     controller   = ProbeControllerStatus(),
                     locomotion   = ProbeLocomotionStatus(),
