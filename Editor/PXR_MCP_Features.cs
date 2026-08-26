@@ -1,6 +1,8 @@
 // PXR_MCP_Features.cs
 // Step 1 deliverable: four building blocks (VST / Controller / Locomotion / SpatialMesh)
+#if PICO_MCP_SHOW_MENU
 // as plain Editor functions + MenuItems for manual validation.
+#endif
 // Dependency graph:
 //   Common(EnsureXROrigin) -> VST           (uses Main Camera only; no Controller/Locomotion bleed-in)
 //                          -> Controller    (re-shows Left/Right Controller GO + XRInputModalityManager)
@@ -24,8 +26,10 @@ namespace ByteDance.PICO.MCPExtensions.Editor
     // ---------------- Single-active-camera invariant ----------------
     // Not a user-facing block: the XR Origin ships its own Main Camera, so the
     // "only one active camera in the scene" rule is a property maintained by
+#if PICO_MCP_SHOW_MENU
     // EnsureXROrigin(). These MenuItems exist only for manual smoke testing in
     // an Editor without the MCP bridge (mirrors every other block's pattern).
+#endif
     public static class PXR_MCP_Camera
     {
 #if PICO_MCP_SHOW_MENU
