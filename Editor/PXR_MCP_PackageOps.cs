@@ -4,8 +4,10 @@
 // Design notes:
 //   * Wraps UnityEditor.PackageManager.Client + PackageManager.UI.Sample only.
 //   * Never edits Packages/manifest.json by hand — let Client resolve deps & lockfile.
+#if PICO_MCP_SHOW_MENU
 //   * Blocking-style helpers (loop on Request.IsCompleted, 60s timeout) so MenuItems
 //     get an immediate result. Underlying async Request stays accessible if needed.
+#endif
 //   * Idempotent:
 //       - Add: already-installed-and-version-matches  -> success no-op
 //       - Remove: not-installed                       -> success no-op
@@ -288,7 +290,9 @@ namespace ByteDance.PICO.MCPExtensions.Editor
         }
 
         // -----------------------------------------------------------------
+#if PICO_MCP_SHOW_MENU
         // MenuItem shortcuts (manual smoke tests for Step 1).
+#endif
         // -----------------------------------------------------------------
 
         const string XRI = "com.unity.xr.interaction.toolkit";
