@@ -28,6 +28,9 @@
 #   --doctor           只做只读环境体检(git/脚本/工作区/版本/认证/分支可达),
 #                      不切分支、不改文件、不提交、不推送;通过 exit 0,否则 exit 1
 #   --skip-version     跳过"新版本必须更大"校验(格式仍校验)
+#   --strip-menu       发布前删除 Editor 下所有 `#if PICO_MCP_SHOW_MENU ... #endif`
+#                      代码块(含指令与块内代码),让公开发布版不带手动验证用的
+#                      Unity 菜单项。默认关闭(不传就完整保留菜单项代码)。
 #   --tag <name>       推送时打的 tag 名,如 v0.0.4;不填不打 tag。同名 tag 已存在时
 #                      本地用 -f 覆盖(幂等);推送时仅在加 --force 才覆盖远端同名 tag
 #   --from <b>         先从该分支拉取并 checkout(单个),默认用当前工作区(别名 --from-branch)
@@ -49,7 +52,7 @@ set -euo pipefail
 GITHUB_HTTPS="https://github.com/Pico-Developer/Unity-MCP-Extensions.git"
 GITHUB_SSH="git@github.com:Pico-Developer/Unity-MCP-Extensions.git"
 
-usage() { sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,48p' "$0" | sed 's/^# \{0,1\}//'; }
 
 # ---- 定位仓库根 ----
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
@@ -89,8 +92,9 @@ switch_back() {
 
 restore_branch() {
   local code=$?
-  # 清理临时的 prepare_release.py 副本(在切分支前复制出来,避免 checkout 到不含 .codebase 的分支后丢失)
+  # 清理临时的 prepare_release.py / strip_show_menu.py 副本(在切分支前复制出来,避免 checkout 到不含 .codebase 的分支后丢失)
   [ -n "${PREPARE_TMP:-}" ] && rm -f "$PREPARE_TMP" 2>/dev/null || true
+  [ -n "${STRIP_MENU_TMP:-}" ] && rm -f "$STRIP_MENU_TMP" 2>/dev/null || true
   if [ -n "${ORIG_REF:-}" ]; then
     local cur
     cur="$(current_ref)"
@@ -134,9 +138,20 @@ PREPARE="$REPO_ROOT/.codebase/scripts/prepare_release.py"
 PREPARE_TMP="$(mktemp -t prepare_release.XXXXXX.py)"
 cp "$PREPARE" "$PREPARE_TMP"
 
+# ---- 同理:切分支前把 strip_show_menu.py 也复制到临时文件 ----
+# 仅在 --strip-menu 时才会用到;和 prepare_release.py 一样,--from 分支可能不含
+# .codebase/,提前复制到仓库外,后续用 $STRIP_MENU_TMP 执行,不受切分支影响。
+STRIP_MENU_SCRIPT="$REPO_ROOT/.codebase/scripts/strip_show_menu.py"
+STRIP_MENU_TMP=""
+if [ -f "$STRIP_MENU_SCRIPT" ]; then
+  STRIP_MENU_TMP="$(mktemp -t strip_show_menu.XXXXXX.py)"
+  cp "$STRIP_MENU_SCRIPT" "$STRIP_MENU_TMP"
+fi
+
 # ---- 默认参数 ----
 VERSION=""
 SKIP_VERSION=false
+STRIP_MENU=false
 TAG=""
 FROM_BRANCH=""
 TO_BRANCH="main"
@@ -151,6 +166,7 @@ DOCTOR=false
 while [ $# -gt 0 ]; do
   case "$1" in
     --skip-version)        SKIP_VERSION=true; shift;;
+    --strip-menu)          STRIP_MENU=true; shift;;
     --tag)                 TAG="$2"; shift 2;;
     --from|--from-branch)  FROM_BRANCH="$2"; shift 2;;
     --to|--to-branch)      TO_BRANCH="$2"; shift 2;;
@@ -339,6 +355,26 @@ if pkg.get("version") != ver:
 else:
     print(f"[version] package.json version 已是 {ver}")
 PY
+
+# ---- 需求 1:可选删除 Editor 下所有 `#if PICO_MCP_SHOW_MENU ... #endif` 代码块 ----
+# 仅在显式传入 --strip-menu 时执行,让公开发布版不带手动验证用的 Unity 菜单项。
+# 用 .codebase/scripts/strip_show_menu.py 做预处理器感知的成对删除(每个 SHOW_MENU
+# 的 #if 只与自己对应的 #endif 配对,不会误吃到下一个块或内层 #endif),其它条件
+# 编译块(ENABLE_PICO_XR_SDK / UNITY_2023_1_OR_NEWER 等)一律保留。
+if [ "$STRIP_MENU" = true ]; then
+  if [ -z "$STRIP_MENU_TMP" ] || [ ! -f "$STRIP_MENU_TMP" ]; then
+    echo "ERROR: --strip-menu 需要 .codebase/scripts/strip_show_menu.py,但未找到" >&2
+    exit 1
+  fi
+  # 收集 Editor 下的 .cs(含被 Unity 忽略的 SpatialMeshAssets~ 目录里的驱动脚本)。
+  mapfile -t MENU_CS < <(find Editor -type f -name '*.cs' | sort)
+  if [ "${#MENU_CS[@]}" -gt 0 ]; then
+    echo "[strip-menu] 删除 PICO_MCP_SHOW_MENU 代码块,共 ${#MENU_CS[@]} 个文件"
+    python3 "$STRIP_MENU_TMP" "${MENU_CS[@]}"
+  else
+    echo "[strip-menu] Editor 下未找到 .cs,跳过"
+  fi
+fi
 
 git add -A
 git commit -m "chore(release): headers & bump to ${REL_VERSION}" || echo "nothing to commit"
