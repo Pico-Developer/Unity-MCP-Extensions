@@ -23,13 +23,14 @@ CI 完全一致,避免"本地能过、CI 不过"的偏差。
 1. (可选)从 `--from` 指定的分支拉取并切到临时分支;
 2. 调用 `prepare_release.py` 补齐源码版权头、把版本号写入 `package.json`;
 3. 二次强制写入并校验 `package.json` 的 `version` 字段;
-4. 生成一次发布提交 `chore(release): headers & bump to <version>`。
+4. (可选,`--strip-menu`)删除 `Editor/` 下所有 `#if PICO_MCP_SHOW_MENU ... #endif` 代码块(含指令与块内代码),让公开发布版不带手动验证用的 Unity 菜单项;
+5. 生成一次发布提交 `chore(release): headers & bump to <version>`。
 
 只有显式加 `--push` 才会真正推送,并且**推送前**会把 `.codebase/`、`.scripts/`
 从索引中剥离(与 pipeline 一致,防止内部目录泄露到公开的 GitHub 仓库)。
 
 无论脚本成功、失败还是中途被打断,结束时都会通过 `trap ... EXIT` **自动切回起始分支/提交**,
-并清理临时复制出的 `prepare_release.py`。
+并清理临时复制出的 `prepare_release.py`(以及 `--strip-menu` 用到的 `strip_show_menu.py`)。
 
 ### 用法
 
@@ -39,6 +40,9 @@ bash .scripts/release_local.sh 0.0.4
 
 # 跳过"新版本必须更大"的校验(格式仍会校验)
 bash .scripts/release_local.sh v0.0.4 --skip-version
+
+# 发布前剥离手动验证用的 Unity 菜单项(删除所有 #if PICO_MCP_SHOW_MENU 代码块)
+bash .scripts/release_local.sh 0.0.4 --strip-menu --push --to release/v0.0.4
 
 # 从 release/v0.0.4 拉取,处理后推回 GitHub 的 release/v0.0.4,并强制覆盖
 bash .scripts/release_local.sh 0.0.4 --skip-version \
@@ -61,6 +65,7 @@ bash .scripts/release_local.sh --doctor --from release/v0.0.4 --to release/v0.0.
 | `<version>` | **是**(`--doctor` 模式除外) | 目标版本,`v{a.b.c}` 或 `a.b.c`,会写入推送出去的 `package.json` 的 `version`。**不再**从分支名或 `package.json` 推导,不传直接报错退出。 |
 | `--doctor` | 否 | 只读环境体检(git 仓库 / 脚本 / 工作区 / 版本 / GitHub 认证 / `--from`&`--to` 分支可达性),不切分支、不改文件、不提交、不推送。全部通过 `exit 0`,否则 `exit 1`。 |
 | `--skip-version` | 否 | 跳过"新版本号必须比旧的大"的校验(`a.b.c` 格式仍会校验)。 |
+| `--strip-menu` | 否 | 发布前删除 `Editor/` 下所有 `#if PICO_MCP_SHOW_MENU ... #endif` 代码块(含指令与块内代码),让公开发布版不带手动验证用的 Unity 菜单项。默认关闭(不传则完整保留菜单项代码)。见下文"发布前剥离手动验证菜单项"。 |
 | `--tag <name>` | 否 | 推送时额外打的 tag 名,如 `release/v0.0.4`;不填则不打 tag。 |
 | `--from <b>` / `--from-branch <b>` | 否 | 先从该远端分支 `fetch` 并 `checkout`,默认用当前工作区。 |
 | `--to <b...>` / `--to-branch <b...>` | 否 | push 的目标分支,可空格分隔多个,默认 `main`。 |
@@ -91,6 +96,23 @@ bash .scripts/release_local.sh 0.0.4 --push --token github_pat_xxx
 `--push` 时,脚本会逐个(而非一次性)把 `.codebase/`、`.scripts/` 用
 `git rm -r --cached --ignore-unmatch` 从索引剥离,然后**断言**它们确实已不在待推送内容中,
 否则中止 push。这样能确保内部脚本不会被推到公开的 GitHub 仓库。
+
+### 发布前剥离手动验证菜单项(`--strip-menu`)
+
+`Editor/` 下的手动验证菜单项(`[MenuItem]`)通过 `PICO_MCP_SHOW_MENU` 这个 scripting-define
+门控,默认关闭。加 `--strip-menu` 后,脚本会在改完版本号、生成发布提交**之前**,调用
+`.codebase/scripts/strip_show_menu.py` 把 `Editor/` 下所有 `.cs` 里的
+`#if PICO_MCP_SHOW_MENU ... #endif` 代码块(含指令与块内代码)整段删除,让公开发布版
+彻底不带这些菜单项。**默认关闭**——不传 `--strip-menu` 时菜单项代码完整保留。
+
+剥离逻辑是**预处理器感知**的:基于深度计数,每个 `PICO_MCP_SHOW_MENU` 的 `#if` 只与
+**它自己对应**的 `#endif` 配对,绝不会把第一个 `#if` 错配到后一个块的 `#endif`,也不会被
+块内嵌套的 `#if`/`#endif` 误吃;其它条件编译块(`ENABLE_PICO_XR_SDK` /
+`UNITY_2023_1_OR_NEWER` 等)一律原样保留。若遇到不配对(缺 `#endif`)会报错中止,
+而不是破坏源码。
+
+> 与 `prepare_release.py` 一样,`strip_show_menu.py` 也在切分支**之前**被复制到仓库外的
+> 临时文件后执行,因此 `--from` 指定的分支即便不含 `.codebase/` 也不受影响。
 
 ### 常见错误排查
 
