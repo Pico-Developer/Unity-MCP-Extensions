@@ -28,9 +28,9 @@
 #   --doctor           只做只读环境体检(git/脚本/工作区/版本/认证/分支可达),
 #                      不切分支、不改文件、不提交、不推送;通过 exit 0,否则 exit 1
 #   --skip-version     跳过"新版本必须更大"校验(格式仍校验)
-#   --strip-menu       发布前删除 Editor 下所有 `#if PICO_MCP_SHOW_MENU ... #endif`
-#                      代码块(含指令与块内代码),让公开发布版不带手动验证用的
-#                      Unity 菜单项。默认关闭(不传就完整保留菜单项代码)。
+#   --keep-menu        保留 Editor 下所有 `#if PICO_MCP_SHOW_MENU ... #endif`
+#                      代码块(含指令与块内代码)。默认(不传)会删除这些块,
+#                      让公开发布版不带手动验证用的 Unity 菜单项;传此参数则完整保留。
 #   --tag <name>       推送时打的 tag 名,如 v0.0.4;不填不打 tag。同名 tag 已存在时
 #                      本地用 -f 覆盖(幂等);推送时仅在加 --force 才覆盖远端同名 tag
 #   --from <b>         先从该分支拉取并 checkout(单个),默认用当前工作区(别名 --from-branch)
@@ -151,7 +151,7 @@ fi
 # ---- 默认参数 ----
 VERSION=""
 SKIP_VERSION=false
-STRIP_MENU=false
+KEEP_MENU=false
 TAG=""
 FROM_BRANCH=""
 TO_BRANCH="main"
@@ -166,7 +166,7 @@ DOCTOR=false
 while [ $# -gt 0 ]; do
   case "$1" in
     --skip-version)        SKIP_VERSION=true; shift;;
-    --strip-menu)          STRIP_MENU=true; shift;;
+    --keep-menu)           KEEP_MENU=true; shift;;
     --tag)                 TAG="$2"; shift 2;;
     --from|--from-branch)  FROM_BRANCH="$2"; shift 2;;
     --to|--to-branch)      TO_BRANCH="$2"; shift 2;;
@@ -356,14 +356,17 @@ else:
     print(f"[version] package.json version 已是 {ver}")
 PY
 
-# ---- 需求 1:可选删除 Editor 下所有 `#if PICO_MCP_SHOW_MENU ... #endif` 代码块 ----
-# 仅在显式传入 --strip-menu 时执行,让公开发布版不带手动验证用的 Unity 菜单项。
+# ---- 需求 1:默认删除 Editor 下所有 `#if PICO_MCP_SHOW_MENU ... #endif` 代码块 ----
+# 默认执行删除,让公开发布版不带手动验证用的 Unity 菜单项;仅在显式传入 --keep-menu
+# 时跳过删除、完整保留菜单项代码。
 # 用 .codebase/scripts/strip_show_menu.py 做预处理器感知的成对删除(每个 SHOW_MENU
 # 的 #if 只与自己对应的 #endif 配对,不会误吃到下一个块或内层 #endif),其它条件
 # 编译块(ENABLE_PICO_XR_SDK / UNITY_2023_1_OR_NEWER 等)一律保留。
-if [ "$STRIP_MENU" = true ]; then
+if [ "$KEEP_MENU" = true ]; then
+  echo "[strip-menu] --keep-menu:跳过删除,完整保留 PICO_MCP_SHOW_MENU 代码块"
+else
   if [ -z "$STRIP_MENU_TMP" ] || [ ! -f "$STRIP_MENU_TMP" ]; then
-    echo "ERROR: --strip-menu 需要 .codebase/scripts/strip_show_menu.py,但未找到" >&2
+    echo "ERROR: 删除菜单项需要 .codebase/scripts/strip_show_menu.py,但未找到(如需保留菜单项请加 --keep-menu)" >&2
     exit 1
   fi
   # 收集 Editor 下的 .cs(含被 Unity 忽略的 SpatialMeshAssets~ 目录里的驱动脚本)。
