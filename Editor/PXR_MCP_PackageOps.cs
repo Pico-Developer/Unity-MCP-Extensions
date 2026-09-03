@@ -54,6 +54,26 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             public string resolvedPath;
         }
 
+        // Read-only compatibility probe result. Populated by Resolve() via
+        // Client.Search(): tells the caller which versions the registry offers for
+        // a package and — crucially — the highest one that RESOLVES in the CURRENT
+        // Unity Editor version (latestCompatible). This is the L2 "is this version
+        // supported by this Editor?" signal the auto-update flow needs, exposed
+        // without mutating the project.
+        public class PackageResolveInfo
+        {
+            public bool ok;
+            public string packageName;
+            public string source;            // where Search resolved the package from (registry / git ...)
+            public string installedVersion;  // currently installed version, null if not installed
+            public string latest;            // versions.latest — newest published (may be pre-release aware)
+            public string latestCompatible;  // versions.latestCompatible — newest version resolvable in THIS Editor; "" when none
+            public string recommended;       // versions.recommended when the registry marks one; null otherwise
+            public List<string> all;         // versions.all — every published version, ascending
+            public bool compatibleWithCurrentEditor; // true when latestCompatible is non-empty
+            public string error;             // populated when ok==false
+        }
+
         public class SampleInfoLite
         {
             public string packageName;
@@ -95,6 +115,57 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             if (!WaitFor(req, timeoutMs)) return new List<PackageInfoLite>();
             if (req.Status != StatusCode.Success || req.Result == null) return new List<PackageInfoLite>();
             return req.Result.Select(ToLite).ToList();
+        }
+
+        // Read-only compatibility probe. Uses Client.Search() (online) to fetch the
+        // registry version list for `packageName`, then reports versions.latest,
+        // versions.latestCompatible (the newest version that RESOLVES in the CURRENT
+        // Editor), versions.recommended, and the full version list. Mutates NOTHING.
+        //
+        // Notes / limits:
+        //   * latestCompatible is Unity's own "resolvable in this Editor" verdict; an
+        //     empty string means the registry has this package but NO published
+        //     version is compatible with the running Editor (a strong "bad package"
+        //     signal for the auto-update L2 layer).
+        //   * Search only covers packages the registry knows (Unity registry /
+        //     scoped registries). GIT-URL packages are NOT resolvable here — the
+        //     caller must fall back to `git ls-remote` (L1) / Editor-log errors (L3)
+        //     for those. On such a package Search fails and ok==false.
+        public static PackageResolveInfo Resolve(string packageName, int timeoutMs = DefaultTimeoutMs)
+        {
+            if (string.IsNullOrWhiteSpace(packageName))
+                return new PackageResolveInfo { ok = false, error = "packageName is empty" };
+
+            // offlineMode:false so the registry is queried for the compatibility verdict.
+            var req = Client.Search(packageName, offlineMode: false);
+            if (!WaitFor(req, timeoutMs))
+                return new PackageResolveInfo { ok = false, packageName = packageName, error = "timeout waiting for Client.Search" };
+            if (req.Status != StatusCode.Success || req.Result == null || req.Result.Length == 0)
+                return new PackageResolveInfo
+                {
+                    ok = false,
+                    packageName = packageName,
+                    error = req.Error != null ? req.Error.message
+                          : "Client.Search returned no result (package not in a known registry; git-URL packages are not searchable)",
+                };
+
+            var info = req.Result[0];
+            var versions = info.versions;
+            var latestCompatible = versions != null ? versions.latestCompatible : null;
+            var installed = GetInstalled(packageName);
+
+            return new PackageResolveInfo
+            {
+                ok = true,
+                packageName = info.name,
+                source = info.source.ToString(),
+                installedVersion = installed != null ? installed.version : null,
+                latest = versions != null ? versions.latest : null,
+                latestCompatible = latestCompatible,
+                recommended = versions != null ? SafeRecommended(versions) : null,
+                all = versions != null && versions.all != null ? versions.all.ToList() : new List<string>(),
+                compatibleWithCurrentEditor = !string.IsNullOrEmpty(latestCompatible),
+            };
         }
 
         // -----------------------------------------------------------------
@@ -330,6 +401,20 @@ namespace ByteDance.PICO.MCPExtensions.Editor
         static void Menu_ImportXRIStarter() => LogResult(ImportSample(XRI, "Starter Assets"));
 
 #if PICO_MCP_SHOW_MENU
+        [MenuItem("PICO MCP/Packages/XRI/Resolve (Console)")]
+#endif
+        static void Menu_ResolveXRI()
+        {
+            var r = Resolve(XRI);
+            if (!r.ok) { Debug.LogError("[PICO MCP] Resolve FAIL: " + XRI + " -> " + r.error); return; }
+            Debug.Log("[PICO MCP] Resolve " + r.packageName +
+                      ": installed=" + (r.installedVersion ?? "<none>") +
+                      ", latest=" + (r.latest ?? "?") +
+                      ", latestCompatible=" + (string.IsNullOrEmpty(r.latestCompatible) ? "<none>" : r.latestCompatible) +
+                      ", compatibleWithCurrentEditor=" + r.compatibleWithCurrentEditor);
+        }
+
+#if PICO_MCP_SHOW_MENU
         [MenuItem("PICO MCP/Packages/XR Hands/Install (latest)")]
 #endif
         static void Menu_AddXRHands() => LogResult(Add(XR_HANDS));
@@ -381,6 +466,23 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             source = p.source.ToString(),
             resolvedPath = p.resolvedPath,
         };
+
+        // `VersionsInfo.recommended` exists on most UPM versions but has been marked
+        // obsolete / removed in some; resolve it by reflection so this file compiles
+        // across Editor versions without a hard member reference. Returns null when
+        // the member is absent.
+        static string SafeRecommended(UnityEditor.PackageManager.VersionsInfo versions)
+        {
+            if (versions == null) return null;
+            try
+            {
+                var prop = versions.GetType().GetProperty("recommended",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                if (prop == null) return null;
+                return prop.GetValue(versions) as string;
+            }
+            catch { return null; }
+        }
 
         static void LogResult(PackageResult r)
         {
