@@ -7,7 +7,7 @@ PICO XR feature construction APIs for Unity MCP agents. Idempotent, non-destruct
 This Unity package exposes PICO XR building blocks as MCP (Model Context Protocol) tools, enabling AI agents (e.g. Unity AI Assistant) to programmatically configure XR scenes for PICO devices. It is designed to be used together with the **PICO Unity Integration SDK 6.0.x** and aligns its dependency baseline with that SDK (XR Interaction Toolkit **3.x**).
 
 **Package name:** `com.bytedance.pico.mcp-extensions`  
-**Version:** 0.0.4  
+**Version:** 0.0.6  
 **Unity:** 6000.0+  
 **Author:** ByteDance PICO
 
@@ -23,7 +23,7 @@ This Unity package exposes PICO XR building blocks as MCP (Model Context Protoco
 
 ## Features
 
-Four XR building blocks, each with Enable / Disable / Status semantics:
+Seven XR building blocks, each with Enable / Disable / Status semantics:
 
 | Block | Description |
 |---|---|
@@ -31,15 +31,27 @@ Four XR building blocks, each with Enable / Disable / Status semantics:
 | **Controller** | Mounts PICO controller visual models on Left/Right hand anchors |
 | **Locomotion** | Enables XRI locomotion subtree with fine-grained presets (Move, Turn, Teleportation, GrabMove, Climb, Gravity, Jump) |
 | **Spatial Mesh** | Configures `PXR_SpatialMeshManager` with auto-detected MeshPrefab (depends on VST) |
+| **Plane Detection** | Configures PICO SensePack plane detection via a bundled `PXR_PlaneDetectionManager` driver (depends on VST; PICO-native runtime only) |
+| **Hand** | Enables PICO hand tracking (virtual hands) plus an XRI hand-interactor rig so a pinch can drive grab |
+| **Grab** | Object pick-up & drag; ensures the scene `XRInteractionManager` broker and can upgrade a target object into a grabbable |
 
-Additionally, a **Package** tool manages Unity packages and samples (install / remove / update / import samples).
+Additionally, a **Package** tool manages Unity packages and samples (install / remove / update / import samples / query resolvable version).
+
+### Dual runtime support (PICO-native + OpenXR)
+
+The building blocks compile and configure correctly under **both** PICO XR runtimes:
+
+- **PICO-native runtime** (`ENABLE_PICO_XR_SDK`)
+- **OpenXR runtime** (`ENABLE_PICO_OPENXR_SDK`) — VST enables the PICO `PassthroughFeature`; Spatial Mesh forces MultiPass rendering and enables the `PICOSpatialMesh` feature; Hand enables the Unity XR Hands models plus the PICO hand-tracking / hand-interaction OpenXR features.
+
+> **Plane Detection is PICO-native only.** PICO ships no plane-detection OpenXR feature, so under the OpenXR runtime the plane provider is never created and the block is a no-op.
 
 ## Architecture
 
 ```
 Editor/
   PXR_MCP_Common.cs        # Shared helpers: XR Origin lifecycle, module visibility
-  PXR_MCP_Features.cs      # Building block implementations (VST, Controller, Locomotion, SpatialMesh)
+  PXR_MCP_Features.cs      # Building block implementations (VST, Controller, Locomotion, SpatialMesh, Plane, Hand, Grab)
   PXR_MCP_PackageOps.cs    # Package Manager operations (add, remove, samples)
   Tools/
     PXR_MCP_Tools.cs       # MCP tool surface ([McpTool] entry points)
@@ -57,7 +69,10 @@ Editor/
 | `pico_xr_controller` | Enable, Disable, Status | Manage PICO controller models |
 | `pico_xr_locomotion` | Enable, Disable, Configure, Status | Manage locomotion with preset flags |
 | `pico_xr_spatial_mesh` | Enable, Disable, Status | Manage spatial mesh (requires VST) |
-| `pico_xr_package` | List, Info, Add, Remove, Update, ListSamples, ImportSample | Unity Package Manager operations |
+| `pico_xr_plane` | Enable, Disable, Status | Manage PICO plane detection (requires VST; PICO-native runtime only) |
+| `pico_xr_hand` | Enable, Disable, Status | Manage PICO hand tracking (virtual hands) |
+| `pico_xr_grab` | Enable, Disable, Status, MakeGrabbable | Manage grab pick-up & drag; `make_grabbable` upgrades a target object |
+| `pico_xr_package` | List, Info, Add, Remove, Update, ListSamples, ImportSample, Resolvable | Unity Package Manager operations; `resolvable` is a read-only query for the latest-compatible version |
 | `pico_xr_status` | (none) | Aggregate snapshot of all blocks |
 
 ## Design Principles
@@ -101,6 +116,9 @@ When `PICO_MCP_SHOW_MENU` is defined, all building blocks are accessible via the
 - **PICO MCP > Controller > Ensure / Remove**
 - **PICO MCP > Locomotion > Enable / Disable / Configure...**
 - **PICO MCP > Spatial Mesh > Ensure / Remove**
+- **PICO MCP > Plane > Ensure / Remove**
+- **PICO MCP > Hand > Ensure / Remove**
+- **PICO MCP > Grab > Ensure / Remove**
 - **PICO MCP > Packages > ...**
 
 ## License
