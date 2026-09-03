@@ -106,21 +106,6 @@ Add this package to your Unity project via the Package Manager:
 >
 > To **hide** the menu again (default), remove the symbol.
 >
-> **Release note:** the internal release script strips these menu items from
-> public builds **by default** (removes every `#if PICO_MCP_SHOW_MENU ... #endif`
-> block); pass `--keep-menu` to retain them. See `.scripts/README.md`.
-
-When `PICO_MCP_SHOW_MENU` is defined, all building blocks are accessible via the Unity menu:
-
-- **PICO MCP > VST > Ensure / Remove**
-- **PICO MCP > Controller > Ensure / Remove**
-- **PICO MCP > Locomotion > Enable / Disable / Configure...**
-- **PICO MCP > Spatial Mesh > Ensure / Remove**
-- **PICO MCP > Plane > Ensure / Remove**
-- **PICO MCP > Hand > Ensure / Remove**
-- **PICO MCP > Grab > Ensure / Remove**
-- **PICO MCP > Packages > ...**
-
 ## License
 
 Copyright (c) 2015-2022 PICO Technology Co., Ltd. All rights reserved. See [LICENSE.md](LICENSE.md) for details.
