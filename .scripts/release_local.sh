@@ -370,7 +370,11 @@ else
     exit 1
   fi
   # 收集 Editor 下的 .cs(含被 Unity 忽略的 SpatialMeshAssets~ 目录里的驱动脚本)。
-  mapfile -t MENU_CS < <(find Editor -type f -name '*.cs' | sort)
+  # 用 while-read 代替 mapfile,兼容 Bash 3.2(macOS 自带 /bin/bash 无 mapfile/readarray)。
+  MENU_CS=()
+  while IFS= read -r _menu_cs_file; do
+    MENU_CS+=("$_menu_cs_file")
+  done < <(find Editor -type f -name '*.cs' | sort)
   if [ "${#MENU_CS[@]}" -gt 0 ]; then
     echo "[strip-menu] 删除 PICO_MCP_SHOW_MENU 代码块,共 ${#MENU_CS[@]} 个文件"
     python3 "$STRIP_MENU_TMP" "${MENU_CS[@]}"
