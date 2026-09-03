@@ -58,7 +58,7 @@ Editor/
     PXR_MCP_Result.cs      # Uniform result envelope for LLM consumption
 ```
 
-**Layer 1 (Editor):** Plain C# static methods + Unity MenuItems for manual validation.  
+**Layer 1 (Editor):** Plain C# static methods for building-block operations.  
 **Layer 2 (Tools):** `[McpTool]`-annotated methods that wrap Layer 1 and return `PXR_MCP_Result` envelopes.
 
 ## MCP Tools
@@ -91,21 +91,6 @@ Add this package to your Unity project via the Package Manager:
 2. Click **+** > **Add package from disk...** (or add to `Packages/manifest.json`)
 3. Ensure XRI Starter Assets sample is imported (required for XR Origin prefab)
 
-## Manual Testing (MenuItems)
-
-> **Note:** The **PICO MCP** menu bar is hidden by default. It is guarded by the
-> `PICO_MCP_SHOW_MENU` scripting define symbol (default: **off / false**). The MCP
-> tool surface (`[McpTool]` methods) and all underlying C# APIs work regardless of
-> this symbol — it only controls whether the manual-testing menu items appear.
->
-> To **show** the menu (set to true), add `PICO_MCP_SHOW_MENU` to your project's
-> scripting define symbols:
->
-> - **Editor:** *Edit > Project Settings > Player > Other Settings > Scripting Define Symbols*, add `PICO_MCP_SHOW_MENU`, then Apply.
-> - **Or** edit `Packages/manifest.json` / your `.asmdef` `defineConstraints`, or add it to `csc.rsp` (`-define:PICO_MCP_SHOW_MENU`).
->
-> To **hide** the menu again (default), remove the symbol.
->
 ## License
 
 Copyright (c) 2015-2022 PICO Technology Co., Ltd. All rights reserved. See [LICENSE.md](LICENSE.md) for details.
