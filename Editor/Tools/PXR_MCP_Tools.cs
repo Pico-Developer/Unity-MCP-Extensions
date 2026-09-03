@@ -417,7 +417,7 @@ namespace ByteDance.PICO.MCPExtensions.Tools
         // =============================================================
         // pico_xr_package
         // =============================================================
-        public enum PackageAction { List, Info, Add, Remove, Update, ListSamples, ImportSample }
+        public enum PackageAction { List, Info, Add, Remove, Update, ListSamples, ImportSample, Resolvable }
 
         public class PackageParams
         {
@@ -442,8 +442,10 @@ namespace ByteDance.PICO.MCPExtensions.Tools
         }
 
         [McpTool("pico_xr_package",
-            "Manage Unity packages and their samples (install / remove / update / query / list samples / import sample). " +
-            "Designed for XRI, XR Hands, and any other Unity package needed by PICO workflows. Idempotent: re-running with the same arguments is a safe no-op.")]
+            "Manage Unity packages and their samples (install / remove / update / query / list samples / import sample / resolvable). " +
+            "Designed for XRI, XR Hands, and any other Unity package needed by PICO workflows. Idempotent: re-running with the same arguments is a safe no-op. " +
+            "action=resolvable is READ-ONLY: it queries the registry (Client.Search) for a package's version list and reports latestCompatible — " +
+            "the newest version resolvable in the CURRENT Editor — so callers can judge whether an installed/target version is supported without mutating anything.")]
         public static object PicoXrPackage(PackageParams p)
         {
             try
@@ -504,9 +506,16 @@ namespace ByteDance.PICO.MCPExtensions.Tools
                         var r = PXR_MCP_PackageOps.ImportSample(p.PackageName, p.SampleName, p.Overwrite, p.Version);
                         return SampleImportResultToEnvelope(r);
                     }
+                    case PackageAction.Resolvable:
+                    {
+                        if (string.IsNullOrWhiteSpace(p.PackageName))
+                            return PXR_MCP_Result.Error("Missing packageName.", "packageName is required for action=resolvable");
+                        var r = PXR_MCP_PackageOps.Resolve(p.PackageName);
+                        return PackageResolveToEnvelope(r);
+                    }
                 }
                 return PXR_MCP_Result.Error("Unknown action.",
-                    "action must be one of: list, info, add, remove, update, list_samples, import_sample");
+                    "action must be one of: list, info, add, remove, update, list_samples, import_sample, resolvable");
             }
             catch (Exception e) { return PXR_MCP_Result.FromException("pico_xr_package", e); }
         }
@@ -728,6 +737,25 @@ namespace ByteDance.PICO.MCPExtensions.Tools
             return PXR_MCP_Result.Ok(
                 r.packageName + " " + verb + "d at " + r.version +
                 (r.previousVersion != null ? " (was " + r.previousVersion + ")" : "") + ".", r);
+        }
+
+        static PXR_MCP_Result PackageResolveToEnvelope(PXR_MCP_PackageOps.PackageResolveInfo r)
+        {
+            if (r == null) return PXR_MCP_Result.Error("Resolve returned null.", "null result");
+            if (!r.ok)
+                return PXR_MCP_Result.Error(
+                    "Could not resolve " + r.packageName + " from a known registry.", r.error, r);
+            if (!r.compatibleWithCurrentEditor)
+                return PXR_MCP_Result.Skipped(
+                    r.packageName + " has NO version compatible with the current Editor (latest published " +
+                        (r.latest ?? "?") + ").",
+                    "registry knows this package but versions.latestCompatible is empty for this Editor version",
+                    r);
+            return PXR_MCP_Result.Ok(
+                r.packageName + " resolvable: latestCompatible=" + r.latestCompatible +
+                    ", latest=" + (r.latest ?? "?") +
+                    (r.installedVersion != null ? ", installed=" + r.installedVersion : "") + ".",
+                r);
         }
 
         static PXR_MCP_Result SampleImportResultToEnvelope(PXR_MCP_PackageOps.SampleImportResult r)
