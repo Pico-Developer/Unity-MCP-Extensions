@@ -323,7 +323,7 @@ fi
 REL_VERSION="$(cat .release_version)"
 rm -f .release_version
 
-# ---- 需求 3:确保 push 出去的 package.json version = 目标版本(显式强制写入) ----
+# ---- 需求 3:确保 push 出去的 package.json 与 README 版本均等于目标版本 ----
 # prepare_release.py 已写入,这里再做一次强制写入 + 校验,保证最终一定生效。
 python3 - "$REL_VERSION" <<'PY'
 import json, sys
@@ -338,10 +338,18 @@ if pkg.get("version") != ver:
     print(f"[version] package.json 强制写入 version = {ver}")
 else:
     print(f"[version] package.json version 已是 {ver}")
+with open("README.md", "r", encoding="utf-8") as f:
+    readme = f.read()
+import re
+match = re.search(r"(?m)^\*\*Version:\*\*\s+([^\s<]+)", readme)
+if not match or match.group(1) != ver:
+    raise SystemExit("[error] README.md version 与发布版本不一致")
+print(f"[version] README.md version 已是 {ver}")
 PY
 
 git add -A
-git commit -m "chore(release): headers & bump to ${REL_VERSION}" || echo "nothing to commit"
+git commit -m "chore(release): headers & bump to ${REL_VERSION}" \
+  -m "Co-authored-by: [Trae](https://trae.bytedance.com/)" || echo "nothing to commit"
 
 echo "==== 版本: ${REL_VERSION} ===="
 git --no-pager show --stat HEAD | head -60
@@ -379,7 +387,8 @@ for d in .codebase .scripts; do
   fi
 done
 if [ "$STRIPPED" = true ]; then
-  git commit -m "chore(release): strip internal dirs before GitHub push" || true
+  git commit -m "chore(release): strip internal dirs before GitHub push" \
+    -m "Co-authored-by: [Trae](https://trae.bytedance.com/)" || true
 fi
 # 断言:确认 .codebase / .scripts 确实不在待推送内容里,否则中止,避免内部目录泄露到 GitHub
 for d in .codebase .scripts; do
