@@ -21,8 +21,8 @@ CI 完全一致,避免"本地能过、CI 不过"的偏差。
 默认行为(**不加 `--push`**)只做本地处理,**不会**推送到 GitHub:
 
 1. (可选)从 `--from` 指定的分支拉取并切到临时分支;
-2. 调用 `prepare_release.py` 补齐源码版权头、把版本号写入 `package.json`;
-3. 二次强制写入并校验 `package.json` 的 `version` 字段;
+2. 调用 `prepare_release.py` 补齐源码版权头、把版本号同步写入 `package.json` 与 `README.md`;
+3. 二次强制写入并校验 `package.json` 与 `README.md` 的版本一致;
 4. 生成一次发布提交 `chore(release): headers & bump to <version>`。
 
 只有显式加 `--push` 才会真正推送,并且**推送前**会把 `.codebase/`、`.scripts/`
