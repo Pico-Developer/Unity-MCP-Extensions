@@ -31,11 +31,20 @@ Seven XR building blocks, each with Enable / Disable / Status semantics:
 | **Controller** | Mounts PICO controller visual models on Left/Right hand anchors |
 | **Locomotion** | Enables XRI locomotion subtree with fine-grained presets (Move, Turn, Teleportation, GrabMove, Climb, Gravity, Jump) |
 | **Spatial Mesh** | Configures `PXR_SpatialMeshManager` with auto-detected MeshPrefab (depends on VST) |
-| **Plane Detection** | Configures PICO SensePack plane detection via a bundled `PXR_PlaneDetectionManager` driver (depends on VST) |
+| **Plane Detection** | Configures PICO SensePack plane detection via a bundled `PXR_PlaneDetectionManager` driver (depends on VST; PICO-native runtime only) |
 | **Hand** | Enables PICO hand tracking (virtual hands) plus an XRI hand-interactor rig so a pinch can drive grab |
 | **Grab** | Object pick-up & drag; ensures the scene `XRInteractionManager` broker and can upgrade a target object into a grabbable |
 
-Additionally, a **Package** tool manages Unity packages and samples (install / remove / update / import samples).
+Additionally, a **Package** tool manages Unity packages and samples (install / remove / update / import samples / query resolvable version).
+
+### Dual runtime support (PICO-native + OpenXR)
+
+The building blocks compile and configure correctly under **both** PICO XR runtimes:
+
+- **PICO-native runtime** (`ENABLE_PICO_XR_SDK`)
+- **OpenXR runtime** (`ENABLE_PICO_OPENXR_SDK`) — VST enables the PICO `PassthroughFeature`; Spatial Mesh forces MultiPass rendering and enables the `PICOSpatialMesh` feature; Hand enables the Unity XR Hands models plus the PICO hand-tracking / hand-interaction OpenXR features.
+
+> **Plane Detection is PICO-native only.** PICO ships no plane-detection OpenXR feature, so under the OpenXR runtime the plane provider is never created and the block is a no-op.
 
 ## Architecture
 
@@ -49,7 +58,7 @@ Editor/
     PXR_MCP_Result.cs      # Uniform result envelope for LLM consumption
 ```
 
-**Layer 1 (Editor):** Plain C# static methods + Unity MenuItems for manual validation.  
+**Layer 1 (Editor):** Plain C# static methods for building-block operations.
 **Layer 2 (Tools):** `[McpTool]`-annotated methods that wrap Layer 1 and return `PXR_MCP_Result` envelopes.
 
 ## MCP Tools
@@ -60,10 +69,10 @@ Editor/
 | `pico_xr_controller` | Enable, Disable, Status | Manage PICO controller models |
 | `pico_xr_locomotion` | Enable, Disable, Configure, Status | Manage locomotion with preset flags |
 | `pico_xr_spatial_mesh` | Enable, Disable, Status | Manage spatial mesh (requires VST) |
-| `pico_xr_plane` | Enable, Disable, Status | Manage PICO plane detection (requires VST) |
+| `pico_xr_plane` | Enable, Disable, Status | Manage PICO plane detection (requires VST; PICO-native runtime only) |
 | `pico_xr_hand` | Enable, Disable, Status | Manage PICO hand tracking (virtual hands) |
 | `pico_xr_grab` | Enable, Disable, Status, MakeGrabbable | Manage grab pick-up & drag; `make_grabbable` upgrades a target object |
-| `pico_xr_package` | List, Info, Add, Remove, Update, ListSamples, ImportSample | Unity Package Manager operations |
+| `pico_xr_package` | List, Info, Add, Remove, Update, ListSamples, ImportSample, Resolvable | Unity Package Manager operations; `resolvable` is a read-only query for the latest-compatible version |
 | `pico_xr_status` | (none) | Aggregate snapshot of all blocks |
 
 ## Design Principles
@@ -81,32 +90,6 @@ Add this package to your Unity project via the Package Manager:
 1. Open **Window > Package Manager**
 2. Click **+** > **Add package from disk...** (or add to `Packages/manifest.json`)
 3. Ensure XRI Starter Assets sample is imported (required for XR Origin prefab)
-
-## Manual Testing (MenuItems)
-
-> **Note:** The **PICO MCP** menu bar is hidden by default. It is guarded by the
-> `PICO_MCP_SHOW_MENU` scripting define symbol (default: **off / false**). The MCP
-> tool surface (`[McpTool]` methods) and all underlying C# APIs work regardless of
-> this symbol — it only controls whether the manual-testing menu items appear.
->
-> To **show** the menu (set to true), add `PICO_MCP_SHOW_MENU` to your project's
-> scripting define symbols:
->
-> - **Editor:** *Edit > Project Settings > Player > Other Settings > Scripting Define Symbols*, add `PICO_MCP_SHOW_MENU`, then Apply.
-> - **Or** edit `Packages/manifest.json` / your `.asmdef` `defineConstraints`, or add it to `csc.rsp` (`-define:PICO_MCP_SHOW_MENU`).
->
-> To **hide** the menu again (default), remove the symbol.
-
-When `PICO_MCP_SHOW_MENU` is defined, all building blocks are accessible via the Unity menu:
-
-- **PICO MCP > VST > Ensure / Remove**
-- **PICO MCP > Controller > Ensure / Remove**
-- **PICO MCP > Locomotion > Enable / Disable / Configure...**
-- **PICO MCP > Spatial Mesh > Ensure / Remove**
-- **PICO MCP > Plane > Ensure / Remove**
-- **PICO MCP > Hand > Ensure / Remove**
-- **PICO MCP > Grab > Ensure / Remove**
-- **PICO MCP > Packages > ...**
 
 ## License
 
