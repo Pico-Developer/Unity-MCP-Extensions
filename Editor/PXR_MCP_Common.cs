@@ -1,7 +1,12 @@
 // PXR_MCP_Common.cs
 // Step 1 deliverable: minimal common helpers for the four building blocks.
 // Principles:
-//   1. Non-destructive: never SetActive(false) or destroy a foreign XR Origin.
+//   1. Non-destructive: never SetActive(false) or destroy a *user* XR Origin.
+//      Exception: the SDK-default rig literally named "XR Origin (VR)" (created
+//      by the picoxr/openxr templates via GameObject/XR/XR Origin (VR)) is
+//      destroyed when we create our agent origin, so the scene never ends up
+//      with two XR Origins. Matched by exact name only; the agent origin and
+//      any other user rig are never touched.
 //   2. Idempotent: re-running an Ensure() does not duplicate anything.
 //   3. No hardcoded XRI version: resolved via PackageInfo.FindForAssembly.
 //   4. Agent-owned XR Origin is identified by name (Tag may be added later).
@@ -99,6 +104,11 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             Undo.RegisterCreatedObjectUndo(instance, "Create PICO MCP XR Origin");
             instance.name = AgentOriginName;
 
+            // The picoxr / openxr templates seed the scene with a default rig
+            // named "XR Origin (VR)". Now that our agent origin exists, remove it
+            // so the scene does not carry two XR Origins (camera/input conflict).
+            RemoveDefaultVrOrigin();
+
             ApplyFloorTrackingOrigin(instance);
 
             // Attach the shared PICO system manager to the XR Origin ROOT (this is
@@ -117,6 +127,36 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             EnsureSingleActiveCamera(instance);
 
             return instance;
+        }
+
+        // Name of the SDK-default rig the picoxr/openxr templates drop into the
+        // scene (GameObject/XR/XR Origin (VR)). We remove it when creating our
+        // own agent origin to avoid two XR Origins coexisting.
+        const string DefaultVrOriginName = "XR Origin (VR)";
+
+        // Destroy the SDK-default "XR Origin (VR)" rig, if present. Matched by
+        // exact GameObject name so we never touch the agent origin or a user's
+        // own XR Origin. Undo-friendly. Returns the number of rigs removed.
+        static int RemoveDefaultVrOrigin()
+        {
+#if UNITY_2023_1_OR_NEWER
+            var all = UnityEngine.Object.FindObjectsByType<XROrigin>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+#else
+            var all = UnityEngine.Object.FindObjectsOfType<XROrigin>(true);
+#endif
+            int removed = 0;
+            foreach (var o in all)
+            {
+                if (o == null) continue;
+                var go = o.gameObject;
+                if (go.name != DefaultVrOriginName) continue; // exact match only
+                if (go.name == AgentOriginName) continue;      // never our own rig
+                Undo.DestroyObjectImmediate(go);
+                removed++;
+            }
+            if (removed > 0)
+                Debug.Log($"[PICO MCP] Removed {removed} default '{DefaultVrOriginName}' rig(s) to keep a single XR Origin.");
+            return removed;
         }
 
         // -----------------------------------------------------------------
