@@ -121,8 +121,16 @@ namespace ByteDance.PICO.MCPExtensions.Editor
     // ---------------- Controller ----------------
     public static class PXR_MCP_Controller
     {
-        public const string LeftPrefab  = "Packages/com.bytedance.pico.xr/Assets/Resources/Prefabs/LeftControllerModel.prefab";
-        public const string RightPrefab = "Packages/com.bytedance.pico.xr/Assets/Resources/Prefabs/RightControllerModel.prefab";
+        static readonly string[] LeftPrefabCandidates =
+        {
+            "Packages/com.bytedance.pico.xr/Assets/Resources/Prefabs/LeftControllerModel.prefab",
+            "Packages/com.bytedance.pico.xr/Resources/Prefabs/LeftControllerModel.prefab",
+        };
+        static readonly string[] RightPrefabCandidates =
+        {
+            "Packages/com.bytedance.pico.xr/Assets/Resources/Prefabs/RightControllerModel.prefab",
+            "Packages/com.bytedance.pico.xr/Resources/Prefabs/RightControllerModel.prefab",
+        };
         public const string MarkerLeft  = "[PICO_MCP] Left Controller Model";
         public const string MarkerRight = "[PICO_MCP] Right Controller Model";
 
@@ -144,8 +152,8 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             var right = camOffset.Find(PXR_MCP_Common.RightControllerName);
             if (left == null || right == null) { Debug.LogError("[PICO MCP] Left/Right Controller missing."); return false; }
 
-            Mount(left,  LeftPrefab,  "Left Controller Visual",  MarkerLeft);
-            Mount(right, RightPrefab, "Right Controller Visual", MarkerRight);
+            Mount(left,  LeftPrefabCandidates,  "Left Controller Visual",  MarkerLeft);
+            Mount(right, RightPrefabCandidates, "Right Controller Visual", MarkerRight);
             Debug.Log("[PICO MCP] Controller mounted.");
             return true;
         }
@@ -170,17 +178,27 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             Debug.Log("[PICO MCP] Controller removed.");
         }
 
-        static void Mount(Transform parent, string prefabPath, string defaultVisualName, string markerName)
+        static void Mount(Transform parent, string[] prefabPaths, string defaultVisualName, string markerName)
         {
             if (parent.Find(markerName) != null) return; // idempotent
+            GameObject asset = null;
+            foreach (var path in prefabPaths)
+            {
+                asset = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+                if (asset != null) break;
+            }
+            if (asset == null)
+            {
+                Debug.Log("[PICO MCP] Controller prefab not found in any known location; skip mounting custom model.");
+                return;
+            }
+
             var visual = parent.Find(defaultVisualName);
             if (visual != null && visual.gameObject.activeSelf)
             {
                 Undo.RecordObject(visual.gameObject, "Disable XRI default controller visual");
                 visual.gameObject.SetActive(false);
             }
-            var asset = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
-            if (asset == null) { Debug.LogError("[PICO MCP] Controller prefab missing: " + prefabPath); return; }
             var inst = (GameObject)PrefabUtility.InstantiatePrefab(asset, parent);
             Undo.RegisterCreatedObjectUndo(inst, "PICO MCP mount controller");
             inst.name = markerName;
