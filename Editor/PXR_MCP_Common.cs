@@ -2,6 +2,9 @@
 // Step 1 deliverable: minimal common helpers for the four building blocks.
 // Principles:
 //   1. Non-destructive: never SetActive(false) or destroy a foreign XR Origin.
+//      Exception: the SDK-default rig literally named "XR Origin (VR)" is
+//      removed when we create our agent origin, so the scene never ends up with
+//      two XR Origins. Matched by exact name only.
 //   2. Idempotent: re-running an Ensure() does not duplicate anything.
 //   3. No hardcoded XRI version: resolved via PackageInfo.FindForAssembly.
 //   4. Agent-owned XR Origin is identified by name (Tag may be added later).
@@ -107,6 +110,11 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             Undo.RegisterCreatedObjectUndo(instance, "Create PICO MCP XR Origin");
             instance.name = AgentOriginName;
 
+            // The picoxr / openxr templates can seed the scene with a default rig
+            // named "XR Origin (VR)". Once our agent origin exists, remove that
+            // exact default rig to avoid camera/input conflicts from two origins.
+            RemoveDefaultVrOrigin();
+
             ApplyFloorTrackingOrigin(instance);
 
             // Attach the shared PICO system manager to the XR Origin ROOT (this is
@@ -125,6 +133,30 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             EnsureSingleActiveCamera(instance);
 
             return instance;
+        }
+
+        const string DefaultVrOriginName = "XR Origin (VR)";
+
+        static int RemoveDefaultVrOrigin()
+        {
+#if UNITY_2023_1_OR_NEWER
+            var all = UnityEngine.Object.FindObjectsByType<XROrigin>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+#else
+            var all = UnityEngine.Object.FindObjectsOfType<XROrigin>(true);
+#endif
+            int removed = 0;
+            foreach (var origin in all)
+            {
+                if (origin == null) continue;
+                var go = origin.gameObject;
+                if (go.name != DefaultVrOriginName) continue;
+                if (go.name == AgentOriginName) continue;
+                Undo.DestroyObjectImmediate(go);
+                removed++;
+            }
+            if (removed > 0)
+                Debug.Log($"[PICO MCP] Removed {removed} default '{DefaultVrOriginName}' rig(s) to keep a single XR Origin.");
+            return removed;
         }
 
         // -----------------------------------------------------------------
