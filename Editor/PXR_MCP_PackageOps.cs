@@ -1,13 +1,21 @@
+/*******************************************************************************
+Copyright © 2015-2022 PICO Technology Co., Ltd.All rights reserved.
+
+NOTICE：All information contained herein is, and remains the property of
+PICO Technology Co., Ltd. The intellectual and technical concepts
+contained herein are proprietary to PICO Technology Co., Ltd. and may be
+covered by patents, patents in process, and are protected by trade secret or
+copyright law. Dissemination of this information or reproduction of this
+material is strictly forbidden unless prior written permission is obtained from
+PICO Technology Co., Ltd.
+*******************************************************************************/
+
 // PXR_MCP_PackageOps.cs
 // Step 1 sub-system: package & sample management.
 //
 // Design notes:
 //   * Wraps UnityEditor.PackageManager.Client + PackageManager.UI.Sample only.
 //   * Never edits Packages/manifest.json by hand — let Client resolve deps & lockfile.
-#if PICO_MCP_SHOW_MENU
-//   * Blocking-style helpers (loop on Request.IsCompleted, 60s timeout) so MenuItems
-//     get an immediate result. Underlying async Request stays accessible if needed.
-#endif
 //   * Idempotent:
 //       - Add: already-installed-and-version-matches  -> success no-op
 //       - Remove: not-installed                       -> success no-op
@@ -361,17 +369,11 @@ namespace ByteDance.PICO.MCPExtensions.Editor
         }
 
         // -----------------------------------------------------------------
-#if PICO_MCP_SHOW_MENU
-        // MenuItem shortcuts (manual smoke tests for Step 1).
-#endif
         // -----------------------------------------------------------------
 
         const string XRI = "com.unity.xr.interaction.toolkit";
         const string XR_HANDS = "com.unity.xr.hands";
 
-#if PICO_MCP_SHOW_MENU
-        [MenuItem("PICO MCP/Packages/Show Installed (Console)")]
-#endif
         static void Menu_ShowInstalled()
         {
             var list = ListInstalled();
@@ -379,19 +381,10 @@ namespace ByteDance.PICO.MCPExtensions.Editor
                       string.Join("\n", list.Select(p => "  " + p.name + "@" + p.version + "  [" + p.source + "]")));
         }
 
-#if PICO_MCP_SHOW_MENU
-        [MenuItem("PICO MCP/Packages/XRI/Install (latest)")]
-#endif
         static void Menu_AddXRI() => LogResult(Add(XRI));
 
-#if PICO_MCP_SHOW_MENU
-        [MenuItem("PICO MCP/Packages/XRI/Remove")]
-#endif
         static void Menu_RemoveXRI() => LogResult(Remove(XRI));
 
-#if PICO_MCP_SHOW_MENU
-        [MenuItem("PICO MCP/Packages/XRI/List Samples (Console)")]
-#endif
         static void Menu_ListXRISamples()
         {
             var samples = ListSamples(XRI);
@@ -399,14 +392,8 @@ namespace ByteDance.PICO.MCPExtensions.Editor
                       string.Join("\n", samples.Select(s => (s.imported ? "[x] " : "[ ] ") + s.displayName)));
         }
 
-#if PICO_MCP_SHOW_MENU
-        [MenuItem("PICO MCP/Packages/XRI/Import Sample 'Starter Assets'")]
-#endif
         static void Menu_ImportXRIStarter() => LogResult(ImportSample(XRI, "Starter Assets"));
 
-#if PICO_MCP_SHOW_MENU
-        [MenuItem("PICO MCP/Packages/XRI/Resolve (Console)")]
-#endif
         static void Menu_ResolveXRI()
         {
             var r = Resolve(XRI);
@@ -418,14 +405,8 @@ namespace ByteDance.PICO.MCPExtensions.Editor
                       ", compatibleWithCurrentEditor=" + r.compatibleWithCurrentEditor);
         }
 
-#if PICO_MCP_SHOW_MENU
-        [MenuItem("PICO MCP/Packages/XR Hands/Install (latest)")]
-#endif
         static void Menu_AddXRHands() => LogResult(Add(XR_HANDS));
 
-#if PICO_MCP_SHOW_MENU
-        [MenuItem("PICO MCP/Packages/XR Hands/Remove")]
-#endif
         static void Menu_RemoveXRHands() => LogResult(Remove(XR_HANDS));
 
         // -----------------------------------------------------------------
