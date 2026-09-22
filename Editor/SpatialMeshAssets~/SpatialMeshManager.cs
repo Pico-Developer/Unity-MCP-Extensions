@@ -1,22 +1,34 @@
-#if ENABLE_PICO_XR_SDK
 /*******************************************************************************
-Copyright © 2015-2022 PICO Technology Co., Ltd.All rights reserved.  
+Copyright © 2015-2022 PICO Technology Co., Ltd.All rights reserved.
 
-NOTICE：All information contained herein is, and remains the property of 
-PICO Technology Co., Ltd. The intellectual and technical concepts 
-contained herein are proprietary to PICO Technology Co., Ltd. and may be 
-covered by patents, patents in process, and are protected by trade secret or 
-copyright law. Dissemination of this information or reproduction of this 
+NOTICE：All information contained herein is, and remains the property of
+PICO Technology Co., Ltd. The intellectual and technical concepts
+contained herein are proprietary to PICO Technology Co., Ltd. and may be
+covered by patents, patents in process, and are protected by trade secret or
+copyright law. Dissemination of this information or reproduction of this
 material is strictly forbidden unless prior written permission is obtained from
-PICO Technology Co., Ltd. 
+PICO Technology Co., Ltd.
 *******************************************************************************/
+// Platform-common usings live OUTSIDE the PICO guard: none of these depend on a
+// PICO SDK being installed, so the file must not open with
+// `#if ENABLE_PICO_XR_SDK || ENABLE_PICO_OPENXR_SDK`. Only the PICO-specific
+// usings and the class body (which reference PXR_*/Pxr* types) are gated.
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using ByteDance.PICO.XR;
 using UnityEngine;
 using UnityEngine.XR;
 using UnityEngine.XR.Management;
+// Disambiguate Debug: the OpenXR runtime path (`using ByteDance.PICO.OpenXR;`)
+// brings System.Diagnostics.Debug into scope, which collides with
+// UnityEngine.Debug and causes CS0104. Bind bare `Debug` to UnityEngine.Debug.
+using Debug = UnityEngine.Debug;
+
+#if ENABLE_PICO_XR_SDK || ENABLE_PICO_OPENXR_SDK
+using ByteDance.PICO.XR;
+#if ENABLE_PICO_OPENXR_SDK
+using ByteDance.PICO.OpenXR;
+#endif
 
 public class SpatialMeshManager : MonoBehaviour
 {
@@ -65,6 +77,24 @@ public class SpatialMeshManager : MonoBehaviour
     }
     private void InitSystem()
     {
+#if ENABLE_PICO_OPENXR_SDK
+        // OpenXR runtime path: the XRMeshSubsystem is created by the PICO
+        // PICOSpatialMesh OpenXR feature, so it is obtained from SubsystemManager
+        // (not from PXR_Loader.meshSubsystem, which is the native loader), and the
+        // mesh data arrives on OpenXRExtensions.SpatialMeshDataUpdated.
+        var subsystems = new List<XRMeshSubsystem>();
+        SubsystemManager.GetSubsystems(subsystems);
+        if (subsystems.Count > 0)
+        {
+            system = subsystems[0];
+            system.Start();
+            if (system.running) OpenXRExtensions.SpatialMeshDataUpdated += PXR_OnSpatialMeshDataUpdated;
+        }
+        else
+        {
+            Debug.LogWarning("该运行环境无法获取meshSubsystem (OpenXR)");
+        }
+#else
         if (XRGeneralSettings.Instance != null && XRGeneralSettings.Instance.Manager != null)
         {
             var pxrLoader = XRGeneralSettings.Instance.Manager.ActiveLoaderAs<PXR_Loader>();
@@ -82,6 +112,7 @@ public class SpatialMeshManager : MonoBehaviour
                 }
             }
         }
+#endif
         for (var i = 0; i < meshAmount; i++)
         {
             var mesh = Instantiate(meshPrefab, meshContainer);
@@ -233,7 +264,11 @@ public class SpatialMeshManager : MonoBehaviour
     {
         isStopUpdateMesh = true;
 #if !UNITY_EDITOR
+#if ENABLE_PICO_OPENXR_SDK
+        if (system != null && system.running) OpenXRExtensions.SpatialMeshDataUpdated -= PXR_OnSpatialMeshDataUpdated;
+#else
         if (system.running) PXR_Manager.SpatialMeshDataUpdated -= PXR_OnSpatialMeshDataUpdated;
+#endif
 #endif
     }
 }
