@@ -20,6 +20,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using ByteDance.PICO.MCPExtensions;
 using ByteDance.PICO.MCPExtensions.Editor;
 using Unity.AI.MCP.Editor.ToolRegistry;
 using UnityEngine;
@@ -110,6 +111,76 @@ namespace ByteDance.PICO.MCPExtensions.Tools
                 return PXR_MCP_Result.Error("Unknown action.", "action must be one of: enable, disable, status");
             }
             catch (Exception e) { return PXR_MCP_Result.FromException("pico_xr_controller", e); }
+        }
+
+        // =============================================================
+        // pico_xr_haptics
+        // =============================================================
+        public enum HapticsAction { Attach, Configure, Remove, Status }
+        public enum HapticsController { Left, Right, Both }
+
+        public class HapticsParams
+        {
+            [McpDescription("Operation to perform on the PICO controller haptics component.",
+                Required = true, EnumType = typeof(HapticsAction))]
+            public string Action { get; set; }
+
+            [McpDescription("Controller target: left, right, or both.",
+                EnumType = typeof(HapticsController), Default = "both")]
+            public string Controller { get; set; } = "both";
+
+            [McpDescription("Default vibration amplitude in the inclusive range 0..1. Optional for configure.")]
+            public float? Amplitude { get; set; }
+
+            [McpDescription("Default vibration duration in milliseconds in the inclusive range 0..65535. Optional for configure.")]
+            public int? DurationMs { get; set; }
+
+            [McpDescription("Default vibration frequency in hertz in the inclusive range 50..500. Optional for configure.")]
+            public int? FrequencyHz { get; set; }
+        }
+
+        [McpTool("pico_xr_haptics",
+            "Attach, configure, remove, or query a runtime component that calls the current PICO-native " +
+            "PXR_Input.SendHapticImpulse API. The component exposes public methods for arbitrary gameplay scripts " +
+            "and UnityEvents; this tool never chooses or binds a gameplay trigger.")]
+        public static object PicoXrHaptics(HapticsParams p)
+        {
+            try
+            {
+                var target = ParseEnum<PXR_MCP_HapticsTarget>(p?.Controller ?? "both");
+                switch (ParseEnum<HapticsAction>(p?.Action))
+                {
+                    case HapticsAction.Attach:
+                        return HapticsResultToEnvelope(
+                            PXR_MCP_Haptics.Attach(
+                                target,
+                                p?.Amplitude ?? PXR_MCP_Haptics.DefaultAmplitude,
+                                p?.DurationMs ?? PXR_MCP_Haptics.DefaultDurationMs,
+                                p?.FrequencyHz ?? PXR_MCP_Haptics.DefaultFrequencyHz),
+                            "attached");
+                    case HapticsAction.Configure:
+                        return HapticsResultToEnvelope(
+                            PXR_MCP_Haptics.Configure(target, p?.Amplitude, p?.DurationMs, p?.FrequencyHz),
+                            "configured");
+                    case HapticsAction.Remove:
+                        return HapticsResultToEnvelope(PXR_MCP_Haptics.Remove(target), "removed");
+                    case HapticsAction.Status:
+                    {
+                        var result = PXR_MCP_Haptics.Status(target);
+                        if (!result.ok)
+                            return PXR_MCP_Result.Error("Could not inspect controller haptics.", result.error, result);
+                        var count = result.controllers.Count(item => item.attached);
+                        return PXR_MCP_Result.Ok(
+                            count == 0
+                                ? "No controller haptics components are attached for the requested target."
+                                : count + " controller haptics component(s) found.",
+                            result);
+                    }
+                }
+                return PXR_MCP_Result.Error(
+                    "Unknown action.", "action must be one of: attach, configure, remove, status");
+            }
+            catch (Exception e) { return PXR_MCP_Result.FromException("pico_xr_haptics", e); }
         }
 
         // =============================================================
@@ -526,7 +597,7 @@ namespace ByteDance.PICO.MCPExtensions.Tools
         public class StatusParams { /* no parameters */ }
 
         [McpTool("pico_xr_status",
-            "Return a snapshot of all PICO XR blocks (VST, Controller, Locomotion, Spatial Mesh, Plane, Hand, Grab) plus the camera invariant on the agent XR Origin.")]
+            "Return a snapshot of all PICO XR blocks (VST, Controller, Controller Haptics, Locomotion, Spatial Mesh, Plane, Hand, Grab) plus the camera invariant on the agent XR Origin.")]
         public static object PicoXrStatus(StatusParams _)
         {
             try
@@ -536,6 +607,7 @@ namespace ByteDance.PICO.MCPExtensions.Tools
                     runtime      = PXR_MCP_Common.RuntimeName(),
                     vst          = ProbeVstStatus(),
                     controller   = ProbeControllerStatus(),
+                    haptics      = PXR_MCP_Haptics.Status(PXR_MCP_HapticsTarget.Both),
                     locomotion   = ProbeLocomotionStatus(),
                     spatial_mesh = ProbeSpatialMeshStatus(),
                     plane        = ProbePlaneStatus(),
@@ -769,6 +841,15 @@ namespace ByteDance.PICO.MCPExtensions.Tools
                 "Sample already imported at " + r.importPath + ".", r);
             return PXR_MCP_Result.Ok(
                 "Sample imported to " + r.importPath + ".", r);
+        }
+
+        static PXR_MCP_Result HapticsResultToEnvelope(PXR_MCP_HapticsResult result, string verb)
+        {
+            if (result == null) return PXR_MCP_Result.Error("Controller haptics returned null.", "null result");
+            if (!result.ok) return PXR_MCP_Result.Error("Controller haptics were not " + verb + ".", result.error, result);
+            if (!result.changed) return PXR_MCP_Result.AlreadyPresent(
+                "Controller haptics already match the requested state; no change made.", result);
+            return PXR_MCP_Result.Ok("Controller haptics " + verb + ".", result);
         }
 
         // =============================================================

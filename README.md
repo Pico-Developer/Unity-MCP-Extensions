@@ -7,7 +7,7 @@ PICO XR feature construction APIs for Unity MCP agents. Idempotent, non-destruct
 This Unity package exposes PICO XR building blocks as MCP (Model Context Protocol) tools, enabling AI agents (e.g. Unity AI Assistant) to programmatically configure XR scenes for PICO devices. It is designed to be used together with the **PICO Unity Integration SDK 6.0.x** and aligns its dependency baseline with that SDK (XR Interaction Toolkit **3.x**).
 
 **Package name:** `com.bytedance.pico.mcp-extensions`  
-**Version:** 0.0.7-alpha.3<br>
+**Version:** 0.0.7-alpha.4<br>
 **Unity:** 6000.0+  
 **Author:** ByteDance PICO
 
@@ -23,12 +23,13 @@ This Unity package exposes PICO XR building blocks as MCP (Model Context Protoco
 
 ## Features
 
-Seven XR building blocks, each with Enable / Disable / Status semantics:
+Eight XR building blocks:
 
 | Block | Description |
 |---|---|
 | **VST** | Video See-Through (passthrough) - configures camera for transparent background and adds `PXR_CameraEffectBlock` |
 | **Controller** | Mounts PICO controller visual models on Left/Right hand anchors |
+| **Controller Haptics** | Attaches configurable PICO-native vibration components for business code or UnityEvents to invoke |
 | **Locomotion** | Enables XRI locomotion subtree with fine-grained presets (Move, Turn, Teleportation, GrabMove, Climb, Gravity, Jump) |
 | **Spatial Mesh** | Configures `PXR_SpatialMeshManager` with auto-detected MeshPrefab (depends on VST) |
 | **Plane Detection** | Configures PICO SensePack plane detection via a bundled `PXR_PlaneDetectionManager` driver (depends on VST; PICO-native runtime only) |
@@ -37,14 +38,17 @@ Seven XR building blocks, each with Enable / Disable / Status semantics:
 
 Additionally, a **Package** tool manages Unity packages and samples (install / remove / update / import samples / query resolvable version).
 
-### Dual runtime support (PICO-native + OpenXR)
+### Runtime support
 
-The building blocks compile and configure correctly under **both** PICO XR runtimes:
+Most building blocks compile and configure correctly under both PICO XR runtimes:
 
 - **PICO-native runtime** (`ENABLE_PICO_XR_SDK`)
 - **OpenXR runtime** (`ENABLE_PICO_OPENXR_SDK`) — VST enables the PICO `PassthroughFeature`; Spatial Mesh forces MultiPass rendering and enables the `PICOSpatialMesh` feature; Hand enables the Unity XR Hands models plus the PICO hand-tracking / hand-interaction OpenXR features.
 
 > **Plane Detection is PICO-native only.** PICO ships no plane-detection OpenXR feature, so under the OpenXR runtime the plane provider is never created and the block is a no-op.
+> **Controller Haptics is PICO-native only.** Its runtime component intentionally
+> uses `PXR_Input.SendHapticImpulse`; the package still compiles under OpenXR, but
+> haptics attach/configure actions report unsupported.
 
 ## Architecture
 
@@ -52,14 +56,19 @@ The building blocks compile and configure correctly under **both** PICO XR runti
 Editor/
   PXR_MCP_Common.cs        # Shared helpers: XR Origin lifecycle, module visibility
   PXR_MCP_Features.cs      # Building block implementations (VST, Controller, Locomotion, SpatialMesh, Plane, Hand, Grab)
+  PXR_MCP_Haptics.cs       # Editor lifecycle for controller haptics components
   PXR_MCP_PackageOps.cs    # Package Manager operations (add, remove, samples)
   Tools/
     PXR_MCP_Tools.cs       # MCP tool surface ([McpTool] entry points)
     PXR_MCP_Result.cs      # Uniform result envelope for LLM consumption
+Runtime/
+  PXR_MCP_ControllerHaptics.cs # Runtime bridge to PXR_Input.SendHapticImpulse
 ```
 
 **Layer 1 (Editor):** Plain C# static methods for building-block operations.
 **Layer 2 (Tools):** `[McpTool]`-annotated methods that wrap Layer 1 and return `PXR_MCP_Result` envelopes.
+The controller-haptics block additionally ships a runtime component so gameplay
+code and UnityEvents can invoke vibration in a player build.
 
 ## MCP Tools
 
@@ -67,6 +76,7 @@ Editor/
 |---|---|---|
 | `pico_xr_vst` | Enable, Disable, Status | Manage Video See-Through |
 | `pico_xr_controller` | Enable, Disable, Status | Manage PICO controller models |
+| `pico_xr_haptics` | Attach, Configure, Remove, Status | Attach and configure PICO-native controller vibration components without choosing gameplay triggers |
 | `pico_xr_locomotion` | Enable, Disable, Configure, Status | Manage locomotion with preset flags |
 | `pico_xr_spatial_mesh` | Enable, Disable, Status | Manage spatial mesh (requires VST) |
 | `pico_xr_plane` | Enable, Disable, Status | Manage PICO plane detection (requires VST; PICO-native runtime only) |
@@ -74,6 +84,30 @@ Editor/
 | `pico_xr_grab` | Enable, Disable, Status, MakeGrabbable | Manage grab pick-up & drag; `make_grabbable` upgrades a target object |
 | `pico_xr_package` | List, Info, Add, Remove, Update, ListSamples, ImportSample, Resolvable | Unity Package Manager operations; `resolvable` is a read-only query for the latest-compatible version |
 | `pico_xr_status` | (none) | Aggregate snapshot of all blocks |
+
+## Controller haptics
+
+`pico_xr_haptics` attaches `PXR_MCP_ControllerHaptics` to the left, right, or
+both Controller objects under the agent XR Origin. It configures amplitude
+(`0..1`), duration (`0..65535` milliseconds), and frequency (`50..500` Hz).
+The runtime component uses only the current PICO API:
+
+```csharp
+PXR_Input.SendHapticImpulse(vibrateType, amplitude, durationMs, frequencyHz);
+```
+
+The component deliberately does not subscribe to XR Interaction Toolkit or
+other gameplay events. Application code and any compatible UnityEvent can call
+`Vibrate()`, `VibrateWithAmplitude(float)`, `Vibrate(float, int, int)`, or
+`Stop()` at the required business event. Buffered AudioClip/PCM/PHF haptics,
+parametric haptics, and deprecated PICO vibration APIs are outside this tool's
+scope.
+
+Controller haptics currently require the PICO-native runtime
+(`ENABLE_PICO_XR_SDK`). OpenXR projects continue to compile, but attach and
+configure report unsupported; status and cleanup remain available. Editor
+execution cannot prove physical vibration; validate the final behavior on a
+connected PICO device.
 
 ## Design Principles
 
