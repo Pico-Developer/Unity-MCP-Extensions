@@ -1,6 +1,5 @@
-#if ENABLE_PICO_XR_SDK
 /*******************************************************************************
-Copyright © 2015-2022 PICO Technology Co., Ltd.All rights reserved.  
+Copyright © 2015-2022 PICO Technology Co., Ltd.All rights reserved.
 
 NOTICE：All information contained herein is, and remains the property of 
 PICO Technology Co., Ltd. The intellectual and technical concepts 
@@ -30,17 +29,39 @@ PICO Technology Co., Ltd.
 //   * state       : the plane data stream also emits MeshChangeState.Unchanged
 //                   (the mesh stream does not); it is handled as a no-op drop.
 //
+// PLANE DETECTION IS PICO-NATIVE ONLY. Unlike Spatial Mesh (which has a
+// PICOSpatialMesh OpenXR feature that creates its sense-data provider on the
+// OpenXR runtime), PICO ships NO plane-detection OpenXR feature. The plane
+// provider is created ONLY inside the native PXR_Loader
+// (UPxr_CreatePlaneDetectionSenseDataProvider), so under the OpenXR runtime the
+// provider never exists, PXR_Manager.PlaneDetectionDataUpdated never fires, and
+// QueryPlaneAnchorAsync has nothing to query. Therefore this driver is guarded
+// by ENABLE_PICO_XR_SDK only, has no OpenXR branch, and the MCP tool
+// (pico_xr_plane) refuses enable on the OpenXR runtime.
+//
 // PxrPlaneData shares uuid / state / position / rotation / indices / vertices
 // with PxrSpatialMeshInfo, so the geometry-build code is identical, including
 // the world-space vertex bake (rotation * v + position) that keeps the object
 // at the origin and lets the world-space _TargetPosition line up. Unlike the
 // SDK's PXR_PlaneDetectionManager, this driver does NOT overwrite the material
 // color per semantic label -- that would clobber the wireframe fade material.
+// Platform-common usings live OUTSIDE the PICO guard: none of these depend on a
+// PICO SDK being installed, so the file must not open with the PICO guard. Only
+// the PICO-specific using and the class body (which reference PXR_*/Pxr* types)
+// are gated.
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using ByteDance.PICO.XR;
 using UnityEngine;
+using UnityEngine.XR;
+using UnityEngine.XR.Management;
+// Disambiguate Debug: keep bare `Debug` bound to UnityEngine.Debug so this
+// template stays immune to CS0104 if System.Diagnostics.Debug enters scope
+// (mirrors SpatialMeshManager, its OpenXR-enabled sibling in this package).
+using Debug = UnityEngine.Debug;
+
+#if ENABLE_PICO_XR_SDK
+using ByteDance.PICO.XR;
 
 public class PlaneDetectionManager : MonoBehaviour
 {
@@ -86,9 +107,11 @@ public class PlaneDetectionManager : MonoBehaviour
     private void InitSystem()
     {
         // Plane detection has no XR subsystem accessor (unlike meshSubsystem);
-        // start the sense-data provider directly. PXR_Manager drives the query
-        // loop and fires PlaneDetectionDataUpdated.
+        // start the sense-data provider directly.
         PXR_MixedReality.StartSenseDataProvider(PxrSenseDataProviderType.PlaneDetection);
+        // PXR_Manager drives the query loop and fires PlaneDetectionDataUpdated,
+        // so this driver only starts the provider and subscribes. (Native-only:
+        // plane detection has no PICO OpenXR feature -- see the file header.)
         PXR_Manager.PlaneDetectionDataUpdated += PXR_OnPlaneDetectionDataUpdated;
         subscribed = true;
         for (var i = 0; i < meshAmount; i++)
@@ -98,6 +121,7 @@ public class PlaneDetectionManager : MonoBehaviour
             plane.SetActive(false);
         }
     }
+
     void Update()
     {
         if (isStopUpdatePlane) return;
@@ -161,7 +185,7 @@ public class PlaneDetectionManager : MonoBehaviour
         else
         {
             plane = Instantiate(meshPrefab, meshContainer);
-            pool.Enqueue(plane);
+            plane.SetActive(true);
         }
         var renderer = plane.GetComponent<MeshRenderer>();
         MaterialPropertyBlock props = new();
