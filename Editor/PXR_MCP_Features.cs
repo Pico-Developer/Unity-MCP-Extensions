@@ -105,8 +105,8 @@ namespace ByteDance.PICO.MCPExtensions.Editor
     // ---------------- Controller ----------------
     public static class PXR_MCP_Controller
     {
-        public const string LeftPrefab  = "Packages/com.bytedance.pico.xr/Assets/Resources/Prefabs/LeftControllerModel.prefab";
-        public const string RightPrefab = "Packages/com.bytedance.pico.xr/Assets/Resources/Prefabs/RightControllerModel.prefab";
+        public const string LeftPrefab  = "Packages/com.bytedance.pico.xr/Resources/Prefabs/LeftControllerModel.prefab";
+        public const string RightPrefab = "Packages/com.bytedance.pico.xr/Resources/Prefabs/RightControllerModel.prefab";
         public const string MarkerLeft  = "[PICO_MCP] Left Controller Model";
         public const string MarkerRight = "[PICO_MCP] Right Controller Model";
 
