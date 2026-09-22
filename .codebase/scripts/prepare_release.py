@@ -73,13 +73,37 @@ def normalize(v: str) -> str:
     return v
 
 
-def validate(v: str):
-    if not re.fullmatch(r"\d+\.\d+\.\d+", v):
-        sys.exit(f"[error] 版本格式非法,必须为 v{{a.b.c}}/a.b.c(数字): {v}")
+def validate(v: str, allow_prerelease=False):
+    pattern = r"\d+\.\d+\.\d+(?:-alpha\.\d+)?" if allow_prerelease else r"\d+\.\d+\.\d+"
+    if not re.fullmatch(pattern, v):
+        expected = "a.b.c 或 a.b.c-alpha.x" if allow_prerelease else "v{a.b.c}/a.b.c(数字)"
+        sys.exit(f"[error] 版本格式非法,必须为 {expected}: {v}")
 
 
 def as_tuple(v: str):
-    return tuple(int(x) for x in v.split("."))
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:-alpha\.(\d+))?", v)
+    if not match:
+        raise ValueError(f"invalid version: {v}")
+    major, minor, patch, alpha = match.groups()
+    # 稳定版高于相同 a.b.c 的任意 alpha 预发布版。
+    return (int(major), int(minor), int(patch), 1 if alpha is None else 0, int(alpha or 0))
+
+
+def update_readme_version(new_v: str):
+    path = "README.md"
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+    updated, count = re.subn(
+        r"(?m)^(\*\*Version:\*\*\s+)[^\s<]+",
+        lambda match: match.group(1) + new_v,
+        content,
+        count=1,
+    )
+    if count != 1:
+        sys.exit(f"[error] {path} 中必须且只能有一个 **Version:** 声明")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(updated)
+    print(f"[version] README.md -> {new_v}")
 
 
 def bump_version(new_v: str, skip_version: bool):
@@ -89,7 +113,7 @@ def bump_version(new_v: str, skip_version: bool):
         pkg = json.load(f)
     old_v = normalize(str(pkg.get("version", "0.0.0")))
     if not skip_version:
-        validate(old_v)
+        validate(old_v, allow_prerelease=True)
         if as_tuple(new_v) <= as_tuple(old_v):
             sys.exit(f"[error] 新版本 {new_v} 必须大于当前版本 {old_v}"
                      f"(如需跳过请加 --skip-version)")
@@ -98,6 +122,7 @@ def bump_version(new_v: str, skip_version: bool):
         json.dump(pkg, f, indent=2, ensure_ascii=False)
         f.write("\n")
     print(f"[version] package.json {old_v} -> {new_v}")
+    update_readme_version(new_v)
     return new_v
 
 
