@@ -116,69 +116,145 @@ namespace ByteDance.PICO.MCPExtensions.Tools
         // =============================================================
         // pico_xr_haptics
         // =============================================================
-        public enum HapticsAction { Attach, Configure, Remove, Status }
+        public enum HapticsAction { Attach, UpsertEffect, RemoveEffect, Remove, Status }
         public enum HapticsController { Left, Right, Both }
+        public enum HapticsEffectType { Impulse, AudioClipBuffer, PhfBuffer }
+        public enum HapticsChannelFlip { No, Yes }
+        public enum HapticsCacheType { DontCache, CacheAndVibrate, CacheNoVibrate }
 
         public class HapticsParams
         {
-            [McpDescription("Operation to perform on the PICO controller haptics component.",
+            [McpDescription("Operation to perform on the XR Origin haptics manager or one named effect.",
                 Required = true, EnumType = typeof(HapticsAction))]
             public string Action { get; set; }
 
-            [McpDescription("Controller target: left, right, or both.",
+            [McpDescription("Named effect for attach, upsert_effect, or remove_effect.", Default = "Default")]
+            public string EffectName { get; set; } = PXR_MCP_Haptics.DefaultEffectName;
+
+            [McpDescription("Effect source type: impulse, audio_clip_buffer, or phf_buffer.",
+                EnumType = typeof(HapticsEffectType), Default = "impulse")]
+            public string EffectType { get; set; } = "impulse";
+
+            [McpDescription("Controller target: left, right, or both. Both uses independent settings and source IDs per hand.",
                 EnumType = typeof(HapticsController), Default = "both")]
             public string Controller { get; set; } = "both";
 
-            [McpDescription("Default vibration amplitude in the inclusive range 0..1. Optional for configure.")]
+            [McpDescription("Shared impulse amplitude fallback for both hands, inclusive range 0..1.", Default = 0.5f)]
             public float? Amplitude { get; set; }
 
-            [McpDescription("Default vibration duration in milliseconds in the inclusive range 0..65535. Optional for configure.")]
+            [McpDescription("Shared impulse duration fallback for both hands in milliseconds, inclusive range 0..65535.", Default = 100)]
             public int? DurationMs { get; set; }
 
-            [McpDescription("Default vibration frequency in hertz in the inclusive range 50..500. Optional for configure.")]
+            [McpDescription("Shared impulse frequency fallback for both hands in hertz, inclusive range 50..500.", Default = 150)]
             public int? FrequencyHz { get; set; }
+
+            [McpDescription("Left impulse amplitude override, inclusive range 0..1.")]
+            public float? LeftAmplitude { get; set; }
+
+            [McpDescription("Right impulse amplitude override, inclusive range 0..1.")]
+            public float? RightAmplitude { get; set; }
+
+            [McpDescription("Left impulse duration override in milliseconds, inclusive range 0..65535.")]
+            public int? LeftDurationMs { get; set; }
+
+            [McpDescription("Right impulse duration override in milliseconds, inclusive range 0..65535.")]
+            public int? RightDurationMs { get; set; }
+
+            [McpDescription("Left impulse frequency override in hertz, inclusive range 50..500.")]
+            public int? LeftFrequencyHz { get; set; }
+
+            [McpDescription("Right impulse frequency override in hertz, inclusive range 50..500.")]
+            public int? RightFrequencyHz { get; set; }
+
+            [McpDescription("Shared AudioClip asset path fallback for both hands when effectType=audio_clip_buffer.")]
+            public string AudioClipPath { get; set; }
+
+            [McpDescription("Left AudioClip asset path override.")]
+            public string LeftAudioClipPath { get; set; }
+
+            [McpDescription("Right AudioClip asset path override.")]
+            public string RightAudioClipPath { get; set; }
+
+            [McpDescription("Shared PHF JSON TextAsset path fallback for both hands when effectType=phf_buffer.")]
+            public string PhfTextPath { get; set; }
+
+            [McpDescription("Left PHF TextAsset path override.")]
+            public string LeftPhfTextPath { get; set; }
+
+            [McpDescription("Right PHF TextAsset path override.")]
+            public string RightPhfTextPath { get; set; }
+
+            [McpDescription("Shared audio channel flip fallback: no or yes.",
+                EnumType = typeof(HapticsChannelFlip), Default = "no")]
+            public string ChannelFlip { get; set; } = "no";
+
+            [McpDescription("Left audio channel flip override: no or yes.", EnumType = typeof(HapticsChannelFlip))]
+            public string LeftChannelFlip { get; set; }
+
+            [McpDescription("Right audio channel flip override: no or yes.", EnumType = typeof(HapticsChannelFlip))]
+            public string RightChannelFlip { get; set; }
+
+            [McpDescription("Shared audio buffer cache behavior fallback: dont_cache, cache_and_vibrate, or cache_no_vibrate.",
+                EnumType = typeof(HapticsCacheType), Default = "dont_cache")]
+            public string CacheType { get; set; } = "dont_cache";
+
+            [McpDescription("Left audio buffer cache behavior override.", EnumType = typeof(HapticsCacheType))]
+            public string LeftCacheType { get; set; }
+
+            [McpDescription("Right audio buffer cache behavior override.", EnumType = typeof(HapticsCacheType))]
+            public string RightCacheType { get; set; }
+
+            [McpDescription("Shared buffered-haptics amplitude scale fallback, inclusive range 0..2.", Default = 1f)]
+            public float? AmplitudeScale { get; set; }
+
+            [McpDescription("Left buffered-haptics amplitude scale override, inclusive range 0..2.")]
+            public float? LeftAmplitudeScale { get; set; }
+
+            [McpDescription("Right buffered-haptics amplitude scale override, inclusive range 0..2.")]
+            public float? RightAmplitudeScale { get; set; }
+
+            [McpDescription("Whether this effect becomes the manager's default parameterless-call target. Defaults to true for attach and false for upsert_effect.")]
+            public bool? SetDefault { get; set; }
         }
 
         [McpTool("pico_xr_haptics",
-            "Attach, configure, remove, or query a runtime component that calls the current PICO-native " +
-            "PXR_Input.SendHapticImpulse API. The component exposes public methods for arbitrary gameplay scripts " +
-            "and UnityEvents; this tool never chooses or binds a gameplay trigger.")]
+            "Attach, configure, remove, or query one PXR_MCP_HapticsManager on the agent XR Origin. " +
+            "Named effects support current PICO-native impulse, AudioClip buffer, and PHF buffer APIs with " +
+            "independent left/right settings. Gameplay code and UnityEvents decide when effects run.")]
         public static object PicoXrHaptics(HapticsParams p)
         {
             try
             {
-                var target = ParseEnum<PXR_MCP_HapticsTarget>(p?.Controller ?? "both");
                 switch (ParseEnum<HapticsAction>(p?.Action))
                 {
                     case HapticsAction.Attach:
                         return HapticsResultToEnvelope(
-                            PXR_MCP_Haptics.Attach(
-                                target,
-                                p?.Amplitude ?? PXR_MCP_Haptics.DefaultAmplitude,
-                                p?.DurationMs ?? PXR_MCP_Haptics.DefaultDurationMs,
-                                p?.FrequencyHz ?? PXR_MCP_Haptics.DefaultFrequencyHz),
+                            PXR_MCP_Haptics.Attach(BuildHapticsConfiguration(p, true)),
                             "attached");
-                    case HapticsAction.Configure:
+                    case HapticsAction.UpsertEffect:
                         return HapticsResultToEnvelope(
-                            PXR_MCP_Haptics.Configure(target, p?.Amplitude, p?.DurationMs, p?.FrequencyHz),
-                            "configured");
+                            PXR_MCP_Haptics.UpsertEffect(BuildHapticsConfiguration(p, false)),
+                            "upserted");
+                    case HapticsAction.RemoveEffect:
+                        return HapticsResultToEnvelope(
+                            PXR_MCP_Haptics.RemoveEffect(p?.EffectName), "effect removed");
                     case HapticsAction.Remove:
-                        return HapticsResultToEnvelope(PXR_MCP_Haptics.Remove(target), "removed");
+                        return HapticsResultToEnvelope(PXR_MCP_Haptics.Remove(), "removed");
                     case HapticsAction.Status:
                     {
-                        var result = PXR_MCP_Haptics.Status(target);
+                        var result = PXR_MCP_Haptics.Status();
                         if (!result.ok)
                             return PXR_MCP_Result.Error("Could not inspect controller haptics.", result.error, result);
-                        var count = result.controllers.Count(item => item.attached);
                         return PXR_MCP_Result.Ok(
-                            count == 0
-                                ? "No controller haptics components are attached for the requested target."
-                                : count + " controller haptics component(s) found.",
+                            result.attached
+                                ? "Haptics manager found with " + result.effects.Count + " named effect(s)."
+                                : "No haptics manager is attached to the agent XR Origin.",
                             result);
                     }
                 }
                 return PXR_MCP_Result.Error(
-                    "Unknown action.", "action must be one of: attach, configure, remove, status");
+                    "Unknown action.",
+                    "action must be one of: attach, upsert_effect, remove_effect, remove, status");
             }
             catch (Exception e) { return PXR_MCP_Result.FromException("pico_xr_haptics", e); }
         }
@@ -607,7 +683,7 @@ namespace ByteDance.PICO.MCPExtensions.Tools
                     runtime      = PXR_MCP_Common.RuntimeName(),
                     vst          = ProbeVstStatus(),
                     controller   = ProbeControllerStatus(),
-                    haptics      = PXR_MCP_Haptics.Status(PXR_MCP_HapticsTarget.Both),
+                    haptics      = PXR_MCP_Haptics.Status(),
                     locomotion   = ProbeLocomotionStatus(),
                     spatial_mesh = ProbeSpatialMeshStatus(),
                     plane        = ProbePlaneStatus(),
@@ -850,6 +926,53 @@ namespace ByteDance.PICO.MCPExtensions.Tools
             if (!result.changed) return PXR_MCP_Result.AlreadyPresent(
                 "Controller haptics already match the requested state; no change made.", result);
             return PXR_MCP_Result.Ok("Controller haptics " + verb + ".", result);
+        }
+
+        static PXR_MCP_HapticsEffectConfiguration BuildHapticsConfiguration(
+            HapticsParams p, bool setDefaultFallback)
+        {
+            if (p == null) throw new ArgumentNullException(nameof(p));
+            var sharedAmplitude = p.Amplitude ?? PXR_MCP_Haptics.DefaultImpulseAmplitude;
+            var sharedDuration = p.DurationMs ?? PXR_MCP_Haptics.DefaultImpulseDurationMs;
+            var sharedFrequency = p.FrequencyHz ?? PXR_MCP_Haptics.DefaultImpulseFrequencyHz;
+            var sharedScale = p.AmplitudeScale ?? PXR_MCP_Haptics.DefaultAmplitudeScale;
+            var sharedFlip = ParseEnum<PXR_MCP_HapticsChannelFlip>(p.ChannelFlip ?? "no");
+            var sharedCache = ParseEnum<PXR_MCP_HapticsCacheType>(p.CacheType ?? "dont_cache");
+
+            PXR_MCP_HapticsHandConfiguration Hand(
+                float? amplitude, int? duration, int? frequency, string audioPath, string phfPath,
+                string flip, string cache, float? scale)
+            {
+                return new PXR_MCP_HapticsHandConfiguration
+                {
+                    impulseAmplitude = amplitude ?? sharedAmplitude,
+                    impulseDurationMs = duration ?? sharedDuration,
+                    impulseFrequencyHz = frequency ?? sharedFrequency,
+                    audioClipPath = string.IsNullOrWhiteSpace(audioPath) ? p.AudioClipPath : audioPath,
+                    phfTextPath = string.IsNullOrWhiteSpace(phfPath) ? p.PhfTextPath : phfPath,
+                    channelFlip = string.IsNullOrWhiteSpace(flip)
+                        ? sharedFlip : ParseEnum<PXR_MCP_HapticsChannelFlip>(flip),
+                    cacheType = string.IsNullOrWhiteSpace(cache)
+                        ? sharedCache : ParseEnum<PXR_MCP_HapticsCacheType>(cache),
+                    amplitudeScale = scale ?? sharedScale,
+                };
+            }
+
+            return new PXR_MCP_HapticsEffectConfiguration
+            {
+                name = p.EffectName,
+                effectType = ParseEnum<PXR_MCP_HapticsEffectType>(p.EffectType ?? "impulse"),
+                target = ParseEnum<PXR_MCP_HapticsTarget>(p.Controller ?? "both"),
+                setDefault = p.SetDefault ?? setDefaultFallback,
+                left = Hand(
+                    p.LeftAmplitude, p.LeftDurationMs, p.LeftFrequencyHz,
+                    p.LeftAudioClipPath, p.LeftPhfTextPath, p.LeftChannelFlip,
+                    p.LeftCacheType, p.LeftAmplitudeScale),
+                right = Hand(
+                    p.RightAmplitude, p.RightDurationMs, p.RightFrequencyHz,
+                    p.RightAudioClipPath, p.RightPhfTextPath, p.RightChannelFlip,
+                    p.RightCacheType, p.RightAmplitudeScale),
+            };
         }
 
         // =============================================================
