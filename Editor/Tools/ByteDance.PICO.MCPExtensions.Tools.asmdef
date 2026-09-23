@@ -2,6 +2,7 @@
     "name": "ByteDance.PICO.MCPExtensions.Tools",
     "rootNamespace": "ByteDance.PICO.MCPExtensions.Tools",
     "references": [
+        "ByteDance.PICO.MCPExtensions.Runtime",
         "ByteDance.PICO.MCPExtensions.Editor",
         "Unity.AI.MCP.Editor",
         "Unity.XR.CoreUtils"
