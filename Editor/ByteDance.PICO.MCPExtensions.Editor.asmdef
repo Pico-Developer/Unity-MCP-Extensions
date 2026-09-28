@@ -2,6 +2,7 @@
     "name": "ByteDance.PICO.MCPExtensions.Editor",
     "rootNamespace": "ByteDance.PICO.MCPExtensions.Editor",
     "references": [
+        "ByteDance.PICO.MCPExtensions.Runtime",
         "Unity.XR.CoreUtils",
         "Unity.XR.Interaction.Toolkit",
         "Unity.InputSystem",
