@@ -1,6 +1,6 @@
 {
   "name": "com.bytedance.pico.mcp-extensions",
-  "version": "0.0.7-alpha.5",
+  "version": "0.1.0-alpha.1",
   "displayName": "PICO MCP Extensions",
   "description": "PICO XR feature construction and runtime haptics APIs for Unity MCP agents. Idempotent, non-destructive, and ambiguity-aware.",
   "unity": "6000.0",
