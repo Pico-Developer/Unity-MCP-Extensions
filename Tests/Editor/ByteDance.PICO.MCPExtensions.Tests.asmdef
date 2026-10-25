@@ -4,6 +4,8 @@
     "references": [
         "ByteDance.PICO.MCPExtensions.Runtime",
         "ByteDance.PICO.MCPExtensions.Editor",
+        "ByteDance.PICO.MCPExtensions.Tools",
+        "Unity.AI.MCP.Editor",
         "Unity.XR.CoreUtils"
     ],
     "includePlatforms": [

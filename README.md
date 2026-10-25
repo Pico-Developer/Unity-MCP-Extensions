@@ -7,7 +7,7 @@ PICO XR feature construction APIs for Unity MCP agents. Idempotent, non-destruct
 This Unity package exposes PICO XR building blocks as MCP (Model Context Protocol) tools, enabling AI agents (e.g. Unity AI Assistant) to programmatically configure XR scenes for PICO devices. It is designed to be used together with the **PICO Unity Integration SDK 6.1.x** and aligns its dependency baseline with that SDK (XR Interaction Toolkit **3.x**).
 
 **Package name:** `com.bytedance.pico.mcp-extensions`  
-**Version:** 0.0.7-alpha.5<br>
+**Version:** 0.1.0-alpha.3<br>
 **Unity:** 6000.0+  
 **Author:** ByteDance PICO
 
@@ -36,7 +36,7 @@ Eight XR building blocks:
 | **Hand** | Enables PICO hand tracking (virtual hands) plus an XRI hand-interactor rig so a pinch can drive grab |
 | **Grab** | Object pick-up & drag; ensures the scene `XRInteractionManager` broker and can upgrade a target object into a grabbable |
 
-Additionally, a **Package** tool manages Unity packages and samples (install / remove / update / import samples / query resolvable version).
+Additionally, a **Package** tool manages Unity packages and samples (install / remove / update / import samples / query resolvable version). Mutating package results expose `data.changed`; removing a package that is not installed reports `changed=false` and does not claim that a removal occurred.
 
 ### Runtime support
 
@@ -84,6 +84,8 @@ code and UnityEvents can invoke named effects in a player build.
 | `pico_xr_grab` | Enable, Disable, Status, MakeGrabbable | Manage grab pick-up & drag; `make_grabbable` upgrades a target object |
 | `pico_xr_package` | List, Info, Add, Remove, Update, ListSamples, ImportSample, Resolvable | Unity Package Manager operations; `resolvable` is a read-only query for the latest-compatible version |
 | `pico_xr_status` | (none) | Aggregate snapshot of all blocks |
+
+All `pico_xr_*` tools are enabled by default on a fresh Unity AI Assistant configuration. An explicit user override in **Edit > Project Settings > AI > Unity MCP** still takes precedence.
 
 ## Controller haptics
 
