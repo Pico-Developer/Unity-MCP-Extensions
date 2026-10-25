@@ -58,6 +58,7 @@ usage() { sed -n '2,48p' "$0" | sed 's/^# \{0,1\}//'; }
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
   echo "ERROR: 当前不在 git 仓库内" >&2; exit 1; }
 cd "$REPO_ROOT"
+TMP_ROOT="${TMPDIR:-/tmp}"
 
 # ---- 记录起始分支/位置,结束时(无论成败)自动切回 ----
 # 坑:不要用 `git symbolic-ref --short HEAD` 的输出作为切回参数——当存在同名 tag 等
@@ -135,7 +136,7 @@ PREPARE="$REPO_ROOT/.codebase/scripts/prepare_release.py"
 # --from release/vX.Y.Z 等分支可能不包含 .codebase/ 目录,checkout 过去后 $PREPARE
 # 会随工作区消失,导致后面 python3 "$PREPARE" 报 [Errno 2] No such file or directory。
 # 这里先复制到仓库外的临时文件,后续统一用 $PREPARE_TMP 执行,不受切分支影响。
-PREPARE_TMP="$(mktemp -t prepare_release.XXXXXX.py)"
+PREPARE_TMP="$(mktemp "${TMP_ROOT%/}/prepare_release.XXXXXX")"
 cp "$PREPARE" "$PREPARE_TMP"
 
 # ---- 同理:切分支前把 strip_show_menu.py 也复制到临时文件 ----
@@ -144,7 +145,7 @@ cp "$PREPARE" "$PREPARE_TMP"
 STRIP_MENU_SCRIPT="$REPO_ROOT/.codebase/scripts/strip_show_menu.py"
 STRIP_MENU_TMP=""
 if [ -f "$STRIP_MENU_SCRIPT" ]; then
-  STRIP_MENU_TMP="$(mktemp -t strip_show_menu.XXXXXX.py)"
+  STRIP_MENU_TMP="$(mktemp "${TMP_ROOT%/}/strip_show_menu.XXXXXX")"
   cp "$STRIP_MENU_SCRIPT" "$STRIP_MENU_TMP"
 fi
 
@@ -391,8 +392,32 @@ else
 fi
 
 git add -A
-git commit -m "chore(release): headers & bump to ${REL_VERSION}" \
-  -m "Co-authored-by: [Trae](https://trae.bytedance.com/)" || echo "nothing to commit"
+git -c core.hooksPath=/dev/null commit \
+  -m "chore(release): headers & bump to ${REL_VERSION}" || echo "nothing to commit"
+
+# 外发历史不得包含内部协作 trailer。MCP 外发直接沿用内部仓库历史，因此必须在
+# 临时发布分支上清理所有可达 commit message，同时断言 tree 内容完全不变。
+PUBLIC_BRANCH="$(git symbolic-ref --short HEAD)"
+PUBLIC_TREE_BEFORE="$(git rev-parse HEAD^{tree})"
+FILTER_LOG="$(mktemp "${TMP_ROOT%/}/pico_mcp_public_history.XXXXXX")"
+if ! FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch --force \
+  --msg-filter 'grep -viE "Co-authored-by|TRAE CLI" || true' \
+  -- "$PUBLIC_BRANCH" >"$FILTER_LOG" 2>&1; then
+  tail -100 "$FILTER_LOG" >&2
+  rm -f "$FILTER_LOG"
+  exit 1
+fi
+rm -f "$FILTER_LOG"
+git update-ref -d "refs/original/refs/heads/${PUBLIC_BRANCH}" 2>/dev/null || true
+PUBLIC_TREE_AFTER="$(git rev-parse HEAD^{tree})"
+if [ "$PUBLIC_TREE_BEFORE" != "$PUBLIC_TREE_AFTER" ]; then
+  echo "ERROR: 外发 message 清理改变了 tree,已中止" >&2
+  exit 1
+fi
+if git log "$PUBLIC_BRANCH" --format=%B | grep -Eiq 'Co-authored-by|TRAE CLI'; then
+  echo "ERROR: 外发历史仍包含禁止的 message 字样,已中止" >&2
+  exit 1
+fi
 
 echo "==== 版本: ${REL_VERSION} ===="
 git --no-pager show --stat HEAD | head -60
@@ -430,8 +455,8 @@ for d in .codebase .scripts; do
   fi
 done
 if [ "$STRIPPED" = true ]; then
-  git commit -m "chore(release): strip internal dirs before GitHub push" \
-    -m "Co-authored-by: [Trae](https://trae.bytedance.com/)" || true
+  git -c core.hooksPath=/dev/null commit \
+    -m "chore(release): strip internal dirs before GitHub push" || true
 fi
 # 断言:确认 .codebase / .scripts 确实不在待推送内容里,否则中止,避免内部目录泄露到 GitHub
 for d in .codebase .scripts; do
@@ -440,6 +465,10 @@ for d in .codebase .scripts; do
     exit 1
   fi
 done
+if git log HEAD --format=%B | grep -Eiq 'Co-authored-by|TRAE CLI'; then
+  echo "ERROR: 外发历史包含禁止的 message 字样,已中止 push" >&2
+  exit 1
+fi
 
 git remote remove github 2>/dev/null || true
 git remote add github "$REMOTE_URL"

@@ -42,7 +42,8 @@ namespace ByteDance.PICO.MCPExtensions.Tools
         }
 
         [McpTool("pico_xr_vst",
-            "Enable, disable, or query PICO Video See-Through (passthrough) on the agent XR Origin.")]
+            "Enable, disable, or query PICO Video See-Through (passthrough) on the agent XR Origin.",
+            EnabledByDefault = true)]
         public static object PicoXrVst(VstParams p)
         {
             try
@@ -84,7 +85,8 @@ namespace ByteDance.PICO.MCPExtensions.Tools
         }
 
         [McpTool("pico_xr_controller",
-            "Enable, disable, or query the PICO controller visual models on the agent XR Origin.")]
+            "Enable, disable, or query the PICO controller visual models on the agent XR Origin.",
+            EnabledByDefault = true)]
         public static object PicoXrController(ControllerParams p)
         {
             try
@@ -220,7 +222,8 @@ namespace ByteDance.PICO.MCPExtensions.Tools
         [McpTool("pico_xr_haptics",
             "Attach, configure, remove, or query one PXR_MCP_HapticsManager on the agent XR Origin. " +
             "Named effects support current PICO-native impulse, AudioClip buffer, and PHF buffer APIs with " +
-            "independent left/right settings. Gameplay code and UnityEvents decide when effects run.")]
+            "independent left/right settings. Gameplay code and UnityEvents decide when effects run.",
+            EnabledByDefault = true)]
         public static object PicoXrHaptics(HapticsParams p)
         {
             try
@@ -277,7 +280,8 @@ namespace ByteDance.PICO.MCPExtensions.Tools
 
         [McpTool("pico_xr_locomotion",
             "Enable, disable, or configure the Locomotion root on the agent XR Origin. " +
-            "Locomotion is toggled by SetActive on the Locomotion root; configure further toggles individual child blocks.")]
+            "Locomotion is toggled by SetActive on the Locomotion root; configure further toggles individual child blocks.",
+            EnabledByDefault = true)]
         public static object PicoXrLocomotion(LocomotionParams p)
         {
             try
@@ -336,7 +340,8 @@ namespace ByteDance.PICO.MCPExtensions.Tools
             "Enable is TWO-PHASE: the first call copies the bundled SpatialMeshManager driver + " +
             "shaders/materials/prefab into the project (Assets/PICO_MCP/SpatialMesh), which triggers " +
             "an Editor recompile. When the response reports an import/recompile in progress, settle-loop " +
-            "on pico_xr_status until the MCP bridge returns, then call enable again to mount and configure the driver.")]
+            "on pico_xr_status until the MCP bridge returns, then call enable again to mount and configure the driver.",
+            EnabledByDefault = true)]
         public static object PicoXrSpatialMesh(SpatialMeshParams p)
         {
             try
@@ -399,7 +404,8 @@ namespace ByteDance.PICO.MCPExtensions.Tools
             "PlaneDetectionManager driver + shared shaders/materials/prefab into the project " +
             "(Assets/PICO_MCP/SpatialMesh), which triggers an Editor recompile. When the response reports an " +
             "import/recompile in progress, settle-loop on pico_xr_status until the MCP bridge returns, then " +
-            "call enable again to mount and configure the driver.")]
+            "call enable again to mount and configure the driver.",
+            EnabledByDefault = true)]
         public static object PicoXrPlane(PlaneParams p)
         {
             try
@@ -459,7 +465,8 @@ namespace ByteDance.PICO.MCPExtensions.Tools
             "project setting, AND mounts an XRI hand-interactor rig (from the XRI 'Hands Interaction Demo' " +
             "sample) so a pinch can drive pico_xr_grab. Enable is TWO-PHASE the first time: it imports that " +
             "sample (triggering an Editor recompile) and returns a recompiling status; settle-loop on " +
-            "pico_xr_status, then call enable again to mount the interactors.")]
+            "pico_xr_status, then call enable again to mount the interactors.",
+            EnabledByDefault = true)]
         public static object PicoXrHand(HandParams p)
         {
             try
@@ -524,7 +531,8 @@ namespace ByteDance.PICO.MCPExtensions.Tools
             "Enable, disable, query, or attach grabbable behaviour for PICO hand/controller pick-up & drag on the agent XR Origin. " +
             "Grab is DECOUPLED from hand/controller: enable only guarantees a scene XRInteractionManager (the shared interaction broker) — " +
             "pair it with pico_xr_controller or pico_xr_hand, which supply the interactor. make_grabbable upgrades a " +
-            "target object (or a spawned sample cube) with Collider + Rigidbody + XRGrabInteractable so it can be picked up and dragged.")]
+            "target object (or a spawned sample cube) with Collider + Rigidbody + XRGrabInteractable so it can be picked up and dragged.",
+            EnabledByDefault = true)]
         public static object PicoXrGrab(GrabParams p)
         {
             try
@@ -592,7 +600,8 @@ namespace ByteDance.PICO.MCPExtensions.Tools
             "Manage Unity packages and their samples (install / remove / update / query / list samples / import sample / resolvable). " +
             "Designed for XRI, XR Hands, and any other Unity package needed by PICO workflows. Idempotent: re-running with the same arguments is a safe no-op. " +
             "action=resolvable is READ-ONLY: it queries the registry (Client.Search) for a package's version list and reports latestCompatible — " +
-            "the newest version resolvable in the CURRENT Editor — so callers can judge whether an installed/target version is supported without mutating anything.")]
+            "the newest version resolvable in the CURRENT Editor — so callers can judge whether an installed/target version is supported without mutating anything.",
+            EnabledByDefault = true)]
         public static object PicoXrPackage(PackageParams p)
         {
             try
@@ -673,7 +682,8 @@ namespace ByteDance.PICO.MCPExtensions.Tools
         public class StatusParams { /* no parameters */ }
 
         [McpTool("pico_xr_status",
-            "Return a snapshot of all PICO XR blocks (VST, Controller, Controller Haptics, Locomotion, Spatial Mesh, Plane, Hand, Grab) plus the camera invariant on the agent XR Origin.")]
+            "Return a snapshot of all PICO XR blocks (VST, Controller, Controller Haptics, Locomotion, Spatial Mesh, Plane, Hand, Grab) plus the camera invariant on the agent XR Origin.",
+            EnabledByDefault = true)]
         public static object PicoXrStatus(StatusParams _)
         {
             try
@@ -880,8 +890,13 @@ namespace ByteDance.PICO.MCPExtensions.Tools
                 return PXR_MCP_Result.AlreadyPresent(
                     r.packageName + " was already at " + r.version + "; no-op.", r);
             if (verb == "remove")
+            {
+                if (!r.changed)
+                    return PXR_MCP_Result.Ok(
+                        r.packageName + " was not installed; no change made.", r);
                 return PXR_MCP_Result.Ok(
                     r.packageName + " removed" + (r.previousVersion != null ? " (was " + r.previousVersion + ")" : "") + ".", r);
+            }
             return PXR_MCP_Result.Ok(
                 r.packageName + " " + verb + "d at " + r.version +
                 (r.previousVersion != null ? " (was " + r.previousVersion + ")" : "") + ".", r);

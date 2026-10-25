@@ -44,6 +44,7 @@ namespace ByteDance.PICO.MCPExtensions.Editor
             public string version;       // resolved version if ok==true; null otherwise
             public string previousVersion; // populated when an Add changed the version
             public bool alreadyPresent;  // true => no-op happened (idempotent path)
+            public bool changed;         // true only when the project package state changed
             public string error;         // populated when ok==false
         }
 
@@ -196,6 +197,7 @@ namespace ByteDance.PICO.MCPExtensions.Editor
                         packageName = current.name,
                         version = current.version,
                         alreadyPresent = true,
+                        changed = false,
                     };
                 }
             }
@@ -218,6 +220,7 @@ namespace ByteDance.PICO.MCPExtensions.Editor
                 version = req.Result.version,
                 previousVersion = current != null ? current.version : null,
                 alreadyPresent = false,
+                changed = true,
             };
         }
 
@@ -234,6 +237,7 @@ namespace ByteDance.PICO.MCPExtensions.Editor
                     ok = true,
                     packageName = packageName,
                     alreadyPresent = false,
+                    changed = false,
                     version = null,
                 };
             }
@@ -255,6 +259,7 @@ namespace ByteDance.PICO.MCPExtensions.Editor
                 packageName = packageName,
                 previousVersion = current.version,
                 version = null,
+                changed = true,
             };
         }
 
